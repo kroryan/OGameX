@@ -1,6 +1,7 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
+use OGame\Http\Controllers\Admin\BotManagementController;
 use OGame\Http\Controllers\Admin\DeveloperShortcutsController;
 use OGame\Http\Controllers\Admin\ServerSettingsController as AdminServerSettingsController;
 use OGame\Http\Controllers\AllianceController;
@@ -234,4 +235,16 @@ Route::middleware(['auth', 'globalgame', 'locale', 'admin'])->group(function () 
     Route::post('/admin/developer-shortcuts/resources', [DeveloperShortcutsController::class, 'updateResources'])->name('admin.developershortcuts.update-resources');
     Route::post('/admin/developershortcuts/create-at-coords', [DeveloperShortcutsController::class, 'createAtCoords'])->name('admin.developershortcuts.create-at-coords');
     Route::post('/admin/developershortcuts/create-debris', [DeveloperShortcutsController::class, 'createDebris'])->name('admin.developershortcuts.create-debris');
+
+    // Playerbots management
+    Route::get('/admin/bots', [BotManagementController::class, 'index'])->name('admin.bots.index');
+    Route::get('/admin/bots/create', [BotManagementController::class, 'create'])->name('admin.bots.create');
+    Route::post('/admin/bots', [BotManagementController::class, 'store'])->name('admin.bots.store');
+    Route::get('/admin/bots/{botId}/edit', [BotManagementController::class, 'edit'])->name('admin.bots.edit');
+    Route::put('/admin/bots/{botId}', [BotManagementController::class, 'update'])->name('admin.bots.update');
+    Route::delete('/admin/bots/{botId}', [BotManagementController::class, 'delete'])->name('admin.bots.delete');
+    Route::post('/admin/bots/{botId}/toggle', [BotManagementController::class, 'toggle'])->name('admin.bots.toggle');
+    Route::get('/admin/bots/{botId}/logs', [BotManagementController::class, 'logs'])->name('admin.bots.logs');
+    Route::post('/admin/bots/{botId}/force-action', [BotManagementController::class, 'forceAction'])->name('admin.bots.force-action');
+    Route::get('/admin/bots/stats', [BotManagementController::class, 'stats'])->name('admin.bots.stats');
 });

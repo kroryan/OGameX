@@ -67,6 +67,7 @@
             Server admin
         </div>
         <ul>
+            <li><a class="{{(Request::is('admin/bots*') ? 'active' : '') }}" href="{{ route('admin.bots.index') }}">Bots</a></li>
             <li><a class="{{(Request::is('admin/developer-shortcuts') ? 'active' : '') }}" href="{{ route('admin.developershortcuts.index') }}">Developer shortcuts</a></li>
             <li><a class="{{(Request::is('admin/server-settings') ? 'active' : '') }}" href="{{ route('admin.serversettings.index') }}">Server settings</a></li>
         </ul>

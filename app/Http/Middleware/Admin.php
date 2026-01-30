@@ -18,7 +18,13 @@ class Admin
      */
     public function handle(Request $request, Closure $next, string|null $guard = null)
     {
-        if (Auth::check() && !Auth::user()->hasRole('admin')) {
+        // If not authenticated, redirect to login
+        if (!Auth::check()) {
+            return redirect('/login');
+        }
+
+        // If authenticated but not admin, redirect to overview
+        if (!Auth::user()->hasRole('admin')) {
             return redirect('/overview');
         }
 

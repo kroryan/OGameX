@@ -239,12 +239,23 @@ class BotService
             // Calculate affordable amount
             $price = ObjectService::getObjectPrice($unit->machine_name, $planet);
             $resources = $planet->getResources();
-            $maxAmount = min(
-                (int)($resources->metal->get() / $price->metal->get()) ?: 1,
-                (int)($resources->crystal->get() / $price->crystal->get()) ?: 1,
-                (int)($resources->deuterium->get() / $price->deuterium->get()) ?: 1,
-                100 // Max 100 at once
-            );
+
+            // Check if price is valid (not zero)
+            $metalCost = $price->metal->get();
+            $crystalCost = $price->crystal->get();
+            $deuteriumCost = $price->deuterium->get();
+
+            if ($metalCost == 0 && $crystalCost == 0 && $deuteriumCost == 0) {
+                // Free unit, set to 1
+                $maxAmount = 1;
+            } else {
+                $maxAmount = min(
+                    $metalCost > 0 ? (int)($resources->metal->get() / $metalCost) : 999,
+                    $crystalCost > 0 ? (int)($resources->crystal->get() / $crystalCost) : 999,
+                    $deuteriumCost > 0 ? (int)($resources->deuterium->get() / $deuteriumCost) : 999,
+                    100 // Max 100 at once
+                );
+            }
 
             if ($maxAmount < 1) {
                 $this->logAction(BotActionType::FLEET, 'Cannot afford any units', [], 'failed');

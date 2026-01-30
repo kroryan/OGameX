@@ -1,0 +1,282 @@
+<?php
+
+namespace OGame\Services;
+
+use OGame\Enums\BotObjective;
+use OGame\Enums\BotPersonality;
+use OGame\Models\Bot;
+
+/**
+ * GameStateAnalyzer - Analyzes the current game state for strategic decision-making.
+ */
+class GameStateAnalyzer
+{
+    /**
+     * Game phases based on player points.
+     */
+    private const EARLY_GAME_THRESHOLD = 100000;
+    private const MID_GAME_THRESHOLD = 1000000;
+
+    /**
+     * Analyze the current state of the bot.
+     */
+    public function analyzeCurrentState(BotService $botService): array
+    {
+        $player = $botService->getPlayer();
+        $planets = $player->planets->all();
+
+        // Calculate total points
+        $totalPoints = 0;
+        $buildingPoints = 0;
+        $fleetPoints = 0;
+        $researchPoints = 0;
+        $defensePoints = 0;
+
+        $totalProduction = ['metal' => 0, 'crystal' => 0, 'deuterium' => 0];
+        $totalResources = ['metal' => 0, 'crystal' => 0, 'deuterium' => 0];
+
+        foreach ($planets as $planet) {
+            $resources = $planet->getResources();
+            $totalResources['metal'] += $resources->metal->get();
+            $totalResources['crystal'] += $resources->crystal->get();
+            $totalResources['deuterium'] += $resources->deuterium->get();
+
+            // Production (approximate from mine levels)
+            $totalProduction['metal'] += $this->estimateProduction($planet, 'metal_mine');
+            $totalProduction['crystal'] += $this->estimateProduction($planet, 'crystal_mine');
+            $totalProduction['deuterium'] += $this->estimateProduction($planet, 'deuterium_synthesizer');
+
+            // Points would need to be calculated from buildings/fleet/research
+            $buildingPoints += $this->calculateBuildingPoints($planet);
+            $fleetPoints += $this->calculateFleetPoints($planet);
+            $defensePoints += $this->calculateDefensePoints($planet);
+        }
+
+        $researchPoints = $this->calculateResearchPoints($player);
+        $totalPoints = $buildingPoints + $fleetPoints + $researchPoints + $defensePoints;
+
+        return [
+            'total_points' => $totalPoints,
+            'building_points' => $buildingPoints,
+            'fleet_points' => $fleetPoints,
+            'research_points' => $researchPoints,
+            'defense_points' => $defensePoints,
+            'total_resources' => $totalResources,
+            'total_production' => $totalProduction,
+            'planet_count' => count($planets),
+            'game_phase' => $this->determineGamePhase($totalPoints),
+            'can_afford_fleet' => $totalResources['metal'] > 100000 && $totalResources['crystal'] > 50000,
+            'can_afford_research' => $totalResources['metal'] > 50000 && $totalResources['crystal'] > 25000,
+            'has_significant_fleet' => $fleetPoints > 50000,
+            'is_under_threat' => false, // Would implement threat detection
+        ];
+    }
+
+    /**
+     * Determine the game phase based on points.
+     */
+    public function determineGamePhase(int $points): string
+    {
+        if ($points < self::EARLY_GAME_THRESHOLD) {
+            return 'early';
+        } elseif ($points < self::MID_GAME_THRESHOLD) {
+            return 'mid';
+        } else {
+            return 'late';
+        }
+    }
+
+    /**
+     * Determine the best objective for the bot based on personality and game state.
+     */
+    public function determineObjective(Bot $bot, array $state): BotObjective
+    {
+        $personality = $bot->getPersonalityEnum();
+        $phase = $state['game_phase'];
+        $points = $state['total_points'];
+
+        // Early game: always focus on economy first
+        if ($phase === 'early') {
+            return BotObjective::ECONOMIC_GROWTH;
+        }
+
+        // Mid game: specialize based on personality
+        if ($phase === 'mid') {
+            return match ($personality) {
+                BotPersonality::AGGRESSIVE => BotObjective::FLEET_ACCUMULATION,
+                BotPersonality::DEFENSIVE => BotObjective::DEFENSIVE_FORTIFICATION,
+                BotPersonality::ECONOMIC => BotObjective::ECONOMIC_GROWTH,
+                BotPersonality::BALANCED => BotObjective::TERRITORIAL_EXPANSION,
+            };
+        }
+
+        // Late game: full specialization
+        if ($phase === 'late') {
+            // Aggressive bots switch to raiding if they have fleet
+            if ($personality === BotPersonality::AGGRESSIVE && $state['has_significant_fleet']) {
+                return BotObjective::RAIDING_AND_PROFIT;
+            }
+
+            return match ($personality) {
+                BotPersonality::AGGRESSIVE => BotObjective::FLEET_ACCUMULATION,
+                BotPersonality::DEFENSIVE => BotObjective::DEFENSIVE_FORTIFICATION,
+                BotPersonality::ECONOMIC => BotObjective::ECONOMIC_GROWTH,
+                BotPersonality::BALANCED => BotObjective::RAIDING_AND_PROFIT,
+            };
+        }
+
+        return BotObjective::ECONOMIC_GROWTH;
+    }
+
+    /**
+     * Estimate production from a mine.
+     */
+    private function estimateProduction(PlanetService $planet, string $machineName): int
+    {
+        $level = $planet->getObjectLevel($machineName);
+        if ($level <= 0) {
+            return 0;
+        }
+
+        // Simplified production formula
+        return match ($machineName) {
+            'metal_mine' => (int)(30 * $level * pow(1.1, $level)),
+            'crystal_mine' => (int)(20 * $level * pow(1.1, $level)),
+            'deuterium_synthesizer' => (int)(10 * $level * pow(1.1, $level) * 0.7), // Average energy factor
+            default => 0,
+        };
+    }
+
+    /**
+     * Calculate building points for a planet.
+     */
+    private function calculateBuildingPoints(PlanetService $planet): int
+    {
+        // Simplified: sum of building levels
+        $buildings = [
+            'metal_mine', 'crystal_mine', 'deuterium_synthesizer',
+            'metal_store', 'crystal_store', 'deuterium_store',
+            'robot_factory', 'shipyard', 'research_lab',
+            'solar_plant', 'fusion_reactor',
+        ];
+
+        $points = 0;
+        foreach ($buildings as $building) {
+            try {
+                $level = $planet->getObjectLevel($building);
+                $points += $level * $level; // Each level costs ~level^2 resources
+            } catch (\Exception $e) {
+                // Building doesn't exist, skip it
+                continue;
+            }
+        }
+
+        return $points;
+    }
+
+    /**
+     * Calculate fleet points for a planet.
+     */
+    private function calculateFleetPoints(PlanetService $planet): int
+    {
+        try {
+            $points = 0;
+
+            // Get ship units
+            $ships = $planet->getShipUnits();
+            if ($ships && !empty($ships->units)) {
+                foreach ($ships->units as $unitObj) {
+                    $unitPoints = $this->getUnitPoints($unitObj->unitObject->machine_name);
+                    $points += $unitPoints * $unitObj->amount;
+                }
+            }
+
+            return $points;
+        } catch (\Exception $e) {
+            return 0;
+        }
+    }
+
+    /**
+     * Get points value for a unit.
+     */
+    private function getUnitPoints(string $machineName): int
+    {
+        return match ($machineName) {
+            // Ships
+            'light_fighter' => 4,
+            'heavy_fighter' => 10,
+            'cruiser' => 29,
+            'battleship' => 60,
+            'battlecruiser' => 70,
+            'bomber' => 90,
+            'destroyer' => 125,
+            'deathstar' => 10000,
+            'small_transport' => 4,
+            'large_transport' => 12,
+            'colony_ship' => 40,
+            'recycler' => 18,
+            'espionage_probe' => 1,
+            'solar_satellite' => 1,
+            // Defense
+            'rocket_launcher' => 2,
+            'light_laser' => 2,
+            'heavy_laser' => 8,
+            'gauss_cannon' => 37,
+            'ion_cannon' => 8,
+            'plasma_turret' => 130,
+            'small_shield_dome' => 20,
+            'large_shield_dome' => 100,
+            default => 1,
+        };
+    }
+
+    /**
+     * Calculate defense points for a planet.
+     */
+    private function calculateDefensePoints(PlanetService $planet): int
+    {
+        $defenses = [
+            'rocket_launcher', 'light_laser', 'heavy_laser',
+            'gauss_cannon', 'ion_cannon', 'plasma_turret',
+            'small_shield_dome', 'large_shield_dome',
+        ];
+
+        $points = 0;
+        foreach ($defenses as $defense) {
+            $level = $planet->getObjectLevel($defense);
+            $unitPoints = $this->getUnitPoints($defense);
+            $points += $unitPoints * $level;
+        }
+
+        return $points;
+    }
+
+    /**
+     * Calculate research points for a player.
+     */
+    private function calculateResearchPoints(PlayerService $player): int
+    {
+        $techs = [
+            'espionage_technology', 'computer_technology', 'weapons_technology',
+            'shielding_technology', 'armor_technology', 'energy_technology',
+            'hyperspace_technology', 'combustion_drive', 'impulse_drive',
+            'hyperspace_drive', 'laser_technology', 'ion_technology',
+            'plasma_technology', 'intergalactic_research_network',
+            'astrophysics_technology', 'graviton_technology',
+        ];
+
+        $points = 0;
+        foreach ($techs as $tech) {
+            try {
+                $level = $player->getResearchLevel($tech);
+                $points += $level * $level;
+            } catch (\Exception $e) {
+                // Technology doesn't exist, skip it
+                continue;
+            }
+        }
+
+        return $points;
+    }
+}

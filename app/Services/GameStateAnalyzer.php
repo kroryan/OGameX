@@ -35,6 +35,12 @@ class GameStateAnalyzer
         $totalProduction = ['metal' => 0, 'crystal' => 0, 'deuterium' => 0];
         $totalResources = ['metal' => 0, 'crystal' => 0, 'deuterium' => 0];
 
+        // Queue status tracking
+        $planetsWithBuildingQueueSpace = 0;
+        $planetsWithResearchQueueSpace = 0;
+        $totalBuildingQueueSlots = 0;
+        $totalResearchQueueSlots = 0;
+
         foreach ($planets as $planet) {
             $resources = $planet->getResources();
             $totalResources['metal'] += $resources->metal->get();
@@ -50,6 +56,31 @@ class GameStateAnalyzer
             $buildingPoints += $this->calculateBuildingPoints($planet);
             $fleetPoints += $this->calculateFleetPoints($planet);
             $defensePoints += $this->calculateDefensePoints($planet);
+
+            // Check queue status
+            try {
+                $bqService = app(\OGame\Services\BuildingQueueService::class);
+                $buildingQueue = $bqService->retrieveQueue($planet);
+                $queueCount = count($buildingQueue->queue);
+                $totalBuildingQueueSlots += $queueCount;
+                if (!$buildingQueue->isQueueFull()) {
+                    $planetsWithBuildingQueueSpace++;
+                }
+            } catch (\Exception $e) {
+                // Ignore queue errors
+            }
+
+            try {
+                $rqService = app(\OGame\Services\ResearchQueueService::class);
+                $researchQueue = $rqService->retrieveQueue($planet);
+                $queueCount = count($researchQueue->queue);
+                $totalResearchQueueSlots += $queueCount;
+                if (!$researchQueue->isQueueFull()) {
+                    $planetsWithResearchQueueSpace++;
+                }
+            } catch (\Exception $e) {
+                // Ignore queue errors
+            }
         }
 
         $researchPoints = $this->calculateResearchPoints($player);
@@ -69,6 +100,13 @@ class GameStateAnalyzer
             'can_afford_research' => $totalResources['metal'] > 50000 && $totalResources['crystal'] > 25000,
             'has_significant_fleet' => $fleetPoints > 50000,
             'is_under_threat' => false, // Would implement threat detection
+            // Queue status
+            'planets_with_building_space' => $planetsWithBuildingQueueSpace,
+            'planets_with_research_space' => $planetsWithResearchQueueSpace,
+            'all_building_queues_full' => $planetsWithBuildingQueueSpace === 0,
+            'all_research_queues_full' => $planetsWithResearchQueueSpace === 0,
+            'total_building_queue_usage' => $totalBuildingQueueSlots,
+            'total_research_queue_usage' => $totalResearchQueueSlots,
         ];
     }
 

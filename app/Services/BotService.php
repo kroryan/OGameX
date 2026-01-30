@@ -208,15 +208,79 @@ class BotService
     }
 
     /**
+     * Check if building queue is full for a planet.
+     */
+    public function isBuildingQueueFull(PlanetService $planet): bool
+    {
+        $queueService = app(BuildingQueueService::class);
+        $queue = $queueService->retrieveQueue($planet);
+        return $queue->isQueueFull();
+    }
+
+    /**
+     * Check if research queue is full for a planet.
+     */
+    public function isResearchQueueFull(PlanetService $planet): bool
+    {
+        $queueService = app(ResearchQueueService::class);
+        $queue = $queueService->retrieveQueue($planet);
+        return $queue->isQueueFull();
+    }
+
+    /**
+     * Check if unit queue is full for a planet.
+     */
+    public function isUnitQueueFull(PlanetService $planet): bool
+    {
+        $queueService = app(UnitQueueService::class);
+        $queue = $queueService->retrieveQueue($planet);
+        return $queue->isQueueFull();
+    }
+
+    /**
+     * Find a planet with available building queue space.
+     */
+    public function findPlanetWithBuildingQueueSpace(): ?PlanetService
+    {
+        $planets = $this->player->planets->all();
+        foreach ($planets as $planet) {
+            if (!$this->isBuildingQueueFull($planet)) {
+                return $planet;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Find a planet with available research queue space.
+     */
+    public function findPlanetWithResearchQueueSpace(): ?PlanetService
+    {
+        $planets = $this->player->planets->all();
+        foreach ($planets as $planet) {
+            if (!$this->isResearchQueueFull($planet)) {
+                return $planet;
+            }
+        }
+        return null;
+    }
+
+    /**
      * Build a random structure on a smart planet selection.
      */
     public function buildRandomStructure(): bool
     {
         try {
-            // Smart planet selection: use planet with lowest storage
+            // Smart planet selection: use planet with lowest storage AND available queue space
             $planet = $this->getLowestStoragePlanet();
+
+            // If that planet has full queue, find another with space
+            if ($planet !== null && $this->isBuildingQueueFull($planet)) {
+                $planet = $this->findPlanetWithBuildingQueueSpace();
+            }
+
             if ($planet === null) {
-                $this->logAction(BotActionType::BUILD, 'No planets available', [], 'failed');
+                $this->logAction(BotActionType::BUILD, 'No planets available or all building queues full', [], 'failed');
                 return false;
             }
 
@@ -509,8 +573,14 @@ class BotService
     {
         try {
             $planet = $this->getRichestPlanet();
+
+            // If that planet has full queue, find another with space
+            if ($planet !== null && $this->isResearchQueueFull($planet)) {
+                $planet = $this->findPlanetWithResearchQueueSpace();
+            }
+
             if ($planet === null) {
-                $this->logAction(BotActionType::RESEARCH, 'No planets available', [], 'failed');
+                $this->logAction(BotActionType::RESEARCH, 'No planets available or all research queues full', [], 'failed');
                 return false;
             }
 

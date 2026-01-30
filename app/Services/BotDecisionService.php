@@ -68,17 +68,17 @@ class BotDecisionService
     {
         $actions = [];
 
-        // Build is always available if we have resources
-        if ($state['total_resources']['metal'] > 1000) {
+        // Build is only available if we have resources AND building queues are not all full
+        if ($state['total_resources']['metal'] > 1000 && !$state['all_building_queues_full']) {
             $actions[] = BotActionType::BUILD;
         }
 
-        // Research is available if we have resources and a lab
-        if ($state['can_afford_research']) {
+        // Research is only available if we have resources AND research queues are not all full
+        if ($state['can_afford_research'] && !$state['all_research_queues_full']) {
             $actions[] = BotActionType::RESEARCH;
         }
 
-        // Fleet is available if we have significant resources
+        // Fleet is always available (unit queue is unlimited) if we have resources
         if ($state['can_afford_fleet']) {
             $actions[] = BotActionType::FLEET;
         }
@@ -88,9 +88,9 @@ class BotDecisionService
             $actions[] = BotActionType::ATTACK;
         }
 
-        // Ensure we always have at least one option
+        // Ensure we always have at least one option - prefer fleet as fallback (unlimited queue)
         if (empty($actions)) {
-            $actions[] = BotActionType::BUILD; // Will wait/accumulate
+            $actions[] = BotActionType::FLEET; // Will try to build fleet
         }
 
         return $actions;

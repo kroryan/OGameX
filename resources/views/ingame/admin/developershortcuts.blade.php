@@ -202,6 +202,31 @@
                                 </div>
                             </form>
 
+                            <form action="{{ route('admin.developershortcuts.update-darkmatter') }}" name="form" method="post">
+                                {{ csrf_field() }}
+                                <p class="box_highlight textCenter no_buddies">@lang('Add Dark Matter to player:')</p>
+                                <div class="group bborder" style="display: block;">
+                                    <div class="fieldwrapper">
+                                        <div class="smallFont">@lang('Add Dark Matter to a specific player by username. Supports k/m/b suffixes (e.g., 1k, 2m, 3b)')</div>
+                                        <label class="styled textBeefy">@lang('Username:')</label>
+                                        <div class="thefield">
+                                            <input type="text" class="textInput w100 textCenter textBeefy"
+                                                   placeholder="Enter username" name="username" required>
+                                        </div>
+                                    </div>
+                                    <div class="fieldwrapper">
+                                        <label class="styled textBeefy">@lang('Dark Matter to add:')</label>
+                                        <div class="thefield">
+                                            <input type="text" pattern="^[+0-9,.kmb]+$" class="textInput w100 textCenter textBeefy"
+                                                   placeholder="1000" name="dark_matter" required>
+                                        </div>
+                                    </div>
+                                    <div class="fieldwrapper" style="text-align: center;">
+                                        <input type="submit" class="btn_blue" name="update_dark_matter" value="@lang('Add Dark Matter')">
+                                    </div>
+                                </div>
+                            </form>
+
                             <form action="{{ route('admin.developershortcuts.create-debris') }}" name="form" method="post">
                                 {{ csrf_field() }}
                                 <p class="box_highlight textCenter no_buddies">@lang('Create/delete debris field at coordinates:')</p>

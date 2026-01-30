@@ -360,62 +360,145 @@ class BotService
 
     /**
      * Get building priority score based on bot personality and current state.
+     * Enhanced with game phase logic and critical building detection.
      */
     private function getBuildingPriority(string $machineName, PlanetService $planet, int $currentLevel): int
     {
         $economy = $this->bot->getEconomySettings();
         $personality = $this->bot->getPersonality();
 
-        // Base priorities for economic decisions
+        // Get game phase
+        $analyzer = new \OGame\Services\GameStateAnalyzer();
+        $state = $analyzer->analyzeCurrentState($this);
+        $phase = $state['game_phase'];
+
+        // CRITICAL buildings for progression
+        $criticalBuildings = [
+            'metal_mine', 'crystal_mine', 'deuterium_synthesizer', // Production
+            'solar_plant', 'fusion_reactor', // Energy
+            'metal_store', 'crystal_store', 'deuterium_store', // Storage
+            'robot_factory', 'shipyard', 'research_lab', // Facilities
+        ];
+
+        // Base priorities with phase awareness
         $priorities = [
-            // Production buildings (most important for economy)
-            'metal_mine' => 120,
-            'crystal_mine' => 120,
-            'deuterium_synthesizer' => 110,
-            // Storage (essential for growth)
-            'metal_store' => 100,
-            'crystal_store' => 100,
-            'deuterium_store' => 100,
-            // Production facilities
-            'robot_factory' => 80,
-            'shipyard' => 70,
-            'nanite_factory' => 60,
-            // Research
-            'research_lab' => 75,
-            // Defense
-            'missile_silo' => 30,
-            'ion_cannon' => 25,
-            'plasma_cannon' => 20,
-            'gauss_cannon' => 15,
-            // Energy
-            'solar_plant' => 90,
-            'fusion_reactor' => 85,
-            // Special
-            'sensor_phalanx' => 40,
-            'jump_gate' => 50,
-            // Terraforming
+            // TIER 1: Core production (highest priority early game)
+            'metal_mine' => 140,
+            'crystal_mine' => 135,
+            'deuterium_synthesizer' => 130,
+            'solar_plant' => 125,
+            'fusion_reactor' => 120,
+
+            // TIER 2: Storage and facilities (essential for growth)
+            'metal_store' => 110,
+            'crystal_store' => 110,
+            'deuterium_store' => 110,
+            'robot_factory' => 100,
+            'shipyard' => 95,
+            'research_lab' => 90,
+
+            // TIER 3: Advanced production (mid game)
+            'nanite_factory' => 85,
+            'metal_den' => 80,
+            'crystal_den' => 80,
+            'deuterium_den' => 75,
+
+            // TIER 4: Specialized buildings
+            'missile_silo' => 70,
+            'sensor_phalanx' => 65,
+            'jump_gate' => 60,
+            'orbital_shipyard' => 55,
             'lunar_base' => 50,
-            'metal_den' => 60,
-            'crystal_den' => 60,
-            'deuterium_den' => 60,
+
+            // TIER 5: Defense
+            'ion_cannon' => 40,
+            'plasma_cannon' => 35,
+            'gauss_cannon' => 30,
+            'shield_domed' => 45,
+            'small_shield_dome' => 35,
+            'large_shield_dome' => 40,
         ];
 
         $base = $priorities[$machineName] ?? 50;
 
+        // Phase-specific bonuses
+        if ($phase === 'early') {
+            // Early game: prioritize mines and energy
+            if (in_array($machineName, ['metal_mine', 'crystal_mine', 'deuterium_synthesizer', 'solar_plant'])) {
+                $base += 30;
+            }
+            // Storage is crucial early
+            if (in_array($machineName, ['metal_store', 'crystal_store', 'deuterium_store']) && $currentLevel < 10) {
+                $base += 25;
+            }
+        } elseif ($phase === 'mid') {
+            // Mid game: boost nanite and facilities
+            if ($machineName === 'nanite_factory') {
+                $base += 40;
+            }
+            if (in_array($machineName, ['robot_factory', 'shipyard', 'research_lab']) && $currentLevel < 10) {
+                $base += 20;
+            }
+            // Start building defenses
+            if (str_starts_with($machineName, 'shield_domed') || str_starts_with($machineName, 'cannon')) {
+                $base += 15;
+            }
+        } elseif ($phase === 'late') {
+            // Late game: focus on advanced buildings
+            if ($machineName === 'orbital_shipyard') {
+                $base += 50;
+            }
+            if (in_array($machineName, ['metal_den', 'crystal_den', 'deuterium_den'])) {
+                $base += 30;
+            }
+        }
+
         // Personality-based modifiers
         if ($personality === BotPersonality::ECONOMIC) {
+            // Economic bots LOVE mines and production
             if (in_array($machineName, ['metal_mine', 'crystal_mine', 'deuterium_synthesizer', 'metal_den', 'crystal_den', 'deuterium_den'])) {
+                $base += 30;
+            }
+            if (in_array($machineName, ['nanite_factory', 'robot_factory', 'fusion_reactor'])) {
                 $base += 20;
             }
         } elseif ($personality === BotPersonality::AGGRESSIVE) {
-            if (in_array($machineName, ['robot_factory', 'shipyard', 'nanite_factory'])) {
+            // Aggressive bots prioritize fleet production facilities
+            if (in_array($machineName, ['robot_factory', 'shipyard', 'nanite_factory', 'orbital_shipyard'])) {
+                $base += 30;
+            }
+            // Some defenses too
+            if (in_array($machineName, ['missile_silo', 'plasma_cannon', 'gauss_cannon'])) {
                 $base += 20;
             }
         } elseif ($personality === BotPersonality::DEFENSIVE) {
-            if (in_array($machineName, ['missile_silo', 'ion_cannon', 'plasma_cannon', 'gauss_cannon', 'shield_domed'])) {
-                $base += 25;
+            // Defensive bots prioritize storage and defenses
+            if (in_array($machineName, ['metal_store', 'crystal_store', 'deuterium_store', 'shield_domed', 'small_shield_dome', 'large_shield_dome'])) {
+                $base += 30;
+            }
+            if (in_array($machineName, ['missile_silo', 'ion_cannon', 'plasma_cannon', 'gauss_cannon'])) {
+                $base += 35;
             }
         }
+
+        // Level curve: prioritize lower levels for faster growth
+        if ($currentLevel < 5) {
+            $base += (5 - $currentLevel) * 8; // +40 for level 0, +32 for level 1, etc.
+        } elseif ($currentLevel >= 20) {
+            $base -= ($currentLevel - 20) * 3; // Reduce priority for very high levels
+        }
+
+        // Storage urgency: if storage is nearly full, prioritize spending
+        if (in_array($machineName, ['metal_store', 'crystal_store', 'deuterium_store'])) {
+            $resources = $planet->getResources();
+            $metalMax = $planet->metalStorage()->get();
+            if ($metalMax > 0 && $resources->metal->get() / $metalMax > 0.9) {
+                $base += 50; // Urgent!
+            }
+        }
+
+        return max(10, min(200, $base));
+    }
 
         // Level curve: prioritize lower levels for faster growth
         $levelModifier = max(0, 25 - $currentLevel);
@@ -661,51 +744,113 @@ class BotService
 
     /**
      * Get technology priority for research decisions.
+     * Enhanced with game phase logic and dependencies.
      */
     private function getTechPriority(string $machineName, BotPersonality $personality): int
     {
-        $basePriorities = [
-            // Combat technologies (highest for aggressive)
-            'weapon_technology' => 100,
-            'shielding_technology' => 100,
-            'armor_technology' => 100,
-            // Drive technologies
-            'combustion_drive' => 80,
-            'impulse_drive' => 85,
-            'hyperspace_drive' => 90,
-            // Special
-            'espionage_technology' => 70,
-            'computer_technology' => 75,
-            'astrophysics_technology' => 60,
-            'hyperspace_technology' => 50,
-            // Production
-            'energy_technology' => 90,
-            'plasma_technology' => 85,
-            // Other
-            'laser_technology' => 70,
-            'ion_technology' => 65,
-            'hyperspace_drive' => 60,
-            // Colony
-            'cold_drive' => 40,
-            'intergalactic_drive' => 50,
+        // Get current level
+        try {
+            $currentLevel = $this->player->getResearchLevel($machineName);
+        } catch (\Exception $e) {
+            $currentLevel = 0;
+        }
+
+        // Determine game phase
+        $analyzer = new \OGame\Services\GameStateAnalyzer();
+        $state = $analyzer->analyzeCurrentState($this);
+        $phase = $state['game_phase'];
+
+        // CRITICAL technologies for mid/late game progression
+        $criticalTechs = [
+            'espionage_technology',  // Needed for spying on targets
+            'computer_technology',   // Needed for fleet slots
+            'astrophysics_technology', // Needed for colonization
+            'hyperspace_technology', // Needed for battleships
         ];
 
-        $base = $basePriorities[$machineName] ?? 50;
+        // High priority base values for critical techs
+        $basePriorities = [
+            // CRITICAL: Core progression techs
+            'espionage_technology' => 150,
+            'computer_technology' => 145,
+            'astrophysics_technology' => 140,
+            'hyperspace_technology' => 135,
+
+            // Combat technologies
+            'weapon_technology' => 120,
+            'shielding_technology' => 120,
+            'armor_technology' => 120,
+
+            // Drive technologies (essential for better ships)
+            'combustion_drive' => 100,
+            'impulse_drive' => 110,
+            'hyperspace_drive' => 115,
+
+            // Energy tech (needed for plasma and other high-end techs)
+            'energy_technology' => 105,
+
+            // Defense techs
+            'laser_technology' => 90,
+            'ion_technology' => 95,
+            'plasma_technology' => 100,
+
+            // Special
+            'intergalactic_research_network' => 80,
+            'graviton_technology' => 70,
+
+            // Colony (less important)
+            'cold_drive' => 50,
+            'intergalactic_drive' => 60,
+        ];
+
+        $base = $basePriorities[$machineName] ?? 70;
+
+        // Early game: boost critical techs even more
+        if ($phase === 'early') {
+            if (in_array($machineName, $criticalTechs)) {
+                $base += 30;
+            }
+        }
+
+        // Mid game: prioritize astrophysics for colonization
+        if ($phase === 'mid') {
+            if ($machineName === 'astrophysics_technology') {
+                $base += 20;
+            }
+        }
+
+        // Level curve: prioritize lower levels
+        if ($currentLevel < 5) {
+            $base += (5 - $currentLevel) * 5; // +25 for level 0, +20 for level 1, etc.
+        } elseif ($currentLevel >= 10) {
+            $base -= ($currentLevel - 10) * 3; // Reduce priority for high levels
+        }
 
         // Personality modifiers
         if ($personality === BotPersonality::AGGRESSIVE) {
             if (str_starts_with($machineName, 'weapon') ||
                 str_starts_with($machineName, 'shield') ||
                 str_starts_with($machineName, 'armor')) {
+                $base += 20;
+            }
+            if (in_array($machineName, ['combustion_drive', 'impulse_drive', 'hyperspace_drive'])) {
                 $base += 15;
             }
+        } elseif ($personality === BotPersonality::DEFENSIVE) {
+            if (in_array($machineName, ['shielding_technology', 'armor_technology', 'ion_technology', 'plasma_technology'])) {
+                $base += 20;
+            }
         } elseif ($personality === BotPersonality::ECONOMIC) {
-            if (in_array($machineName, ['energy_technology', 'plasma_technology', 'cold_drive', 'intergalactic_drive'])) {
+            if (in_array($machineName, ['energy_technology', 'plasma_technology', 'computer_technology', 'espionage_technology'])) {
+                $base += 20;
+            }
+        } elseif ($personality === BotPersonality::BALANCED) {
+            if (in_array($machineName, ['hyperspace_technology', 'computer_technology', 'espionage_technology'])) {
                 $base += 15;
             }
         }
 
-        return $base;
+        return max(10, min(200, $base));
     }
 
     /**

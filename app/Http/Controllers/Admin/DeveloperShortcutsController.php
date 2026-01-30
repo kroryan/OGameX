@@ -12,6 +12,7 @@ use OGame\GameConstants\UniverseConstants;
 use OGame\Http\Controllers\OGameController;
 use OGame\Models\Planet\Coordinate;
 use OGame\Models\Resources;
+use OGame\Services\DarkMatterService;
 use OGame\Services\DebrisFieldService;
 use OGame\Services\ObjectService;
 use OGame\Services\PlayerService;
@@ -317,6 +318,44 @@ class DeveloperShortcutsController extends OGameController
         }
 
         return redirect()->back()->with('error', 'Invalid action specified');
+    }
+
+    /**
+     * Creates a debris field at the specified coordinates.
+     *
+     * @param Request $request
+     * @return RedirectResponse
+     */
+    public function updateDarkMatter(Request $request): RedirectResponse
+    {
+        $validated = $request->validate([
+            'username' => 'required|string',
+            'dark_matter' => 'required|string',
+        ]);
+
+        // Find the user by username
+        $user = \OGame\Models\User::where('username', $validated['username'])->first();
+        if (!$user) {
+            return redirect()->back()->with('error', "User '{$validated['username']}' not found.");
+        }
+
+        // Parse the dark matter amount, handling k/m/b suffixes
+        $amount = (int)AppUtil::parseResourceValue($validated['dark_matter']);
+
+        if ($amount <= 0) {
+            return redirect()->back()->with('error', 'Dark Matter amount must be positive.');
+        }
+
+        // Add dark matter to the user
+        $darkMatterService = app(DarkMatterService::class);
+        $darkMatterService->credit(
+            $user,
+            $amount,
+            \OGame\Enums\DarkMatterTransactionType::ADMIN_ADJUSTMENT->value,
+            'Added via Developer Shortcuts by admin'
+        );
+
+        return redirect()->back()->with('success', "Successfully added {$amount} Dark Matter to user '{$validated['username']}'.");
     }
 
     /**

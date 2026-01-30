@@ -24,7 +24,7 @@
                         @csrf
                         @method('PUT')
 
-                        <p class="box_highlight textCenter">Bot Configuration</p>
+                        <p class="box_highlight textCenter">Basic Configuration</p>
                         <div class="group bborder" style="display: block;">
                             <div class="fieldwrapper">
                                 <label class="styled textBeefy">Bot Name:</label>
@@ -89,6 +89,53 @@
                                             Toggle Status
                                         </a>
                                     </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <p class="box_highlight textCenter" style="margin-top: 15px;">Advanced Configuration (JSON)</p>
+                        <div class="group bborder" style="display: block;">
+                            <div style="font-size: 0.9em; color: #999; margin-bottom: 10px;">
+                                Leave blank to use default values based on personality.
+                            </div>
+
+                            <div class="fieldwrapper">
+                                <label class="styled textBeefy">Activity Schedule:</label>
+                                <div class="thefield">
+                                    <textarea name="activity_schedule" class="textInput w100 textBeefy" rows="3" placeholder='{"active_hours": [0,1,2,...,23], "inactive_days": ["saturday", "sunday"]}'>{{ $bot->activity_schedule ? json_encode($bot->activity_schedule, JSON_PRETTY_PRINT) : '' }}</textarea>
+                                    <div style="font-size: 0.8em; color: #999;">Define when the bot is active (hours 0-23, days lowercase)</div>
+                                </div>
+                            </div>
+
+                            <div class="fieldwrapper">
+                                <label class="styled textBeefy">Action Probabilities:</label>
+                                <div class="thefield">
+                                    <textarea name="action_probabilities" class="textInput w100 textBeefy" rows="2" placeholder='{"build": 30, "fleet": 25, "attack": 20, "research": 25}'>{{ $bot->action_probabilities ? json_encode($bot->action_probabilities, JSON_PRETTY_PRINT) : '' }}</textarea>
+                                    <div style="font-size: 0.8em; color: #999;">Override default action weights (must sum to 100)</div>
+                                </div>
+                            </div>
+
+                            <div class="fieldwrapper">
+                                <label class="styled textBeefy">Economy Settings:</label>
+                                <div class="thefield">
+                                    <textarea name="economy_settings" class="textInput w100 textBeefy" rows="3" placeholder='{"save_for_upgrade_percent": 0.3, "min_resources_for_actions": 10000}'>{{ $bot->economy_settings ? json_encode($bot->economy_settings, JSON_PRETTY_PRINT) : '' }}</textarea>
+                                    <div style="font-size: 0.8em; color: #999;">Resource management settings</div>
+                                </div>
+                            </div>
+
+                            <div class="fieldwrapper">
+                                <label class="styled textBeefy">Fleet Settings:</label>
+                                <div class="thefield">
+                                    <textarea name="fleet_settings" class="textInput w100 textBeefy" rows="3" placeholder='{"attack_fleet_percentage": 0.7, "min_fleet_size_for_attack": 100}'>{{ $bot->fleet_settings ? json_encode($bot->fleet_settings, JSON_PRETTY_PRINT) : '' }}</textarea>
+                                    <div style="font-size: 0.8em; color: #999;">Fleet composition and attack behavior</div>
+                                </div>
+                            </div>
+
+                            <div class="fieldwrapper">
+                                <label class="styled textBeefy">Behavior Flags:</label>
+                                <div class="thefield">
+                                    <textarea name="behavior_flags" class="textInput w100 textBeefy" rows="2" placeholder='{"disabled_actions": ["trade"], "avoid_stronger_players": true}'>{{ $bot->behavior_flags ? json_encode($bot->behavior_flags, JSON_PRETTY_PRINT) : '' }}</textarea>
+                                    <div style="font-size: 0.8em; color: #999;">Enable/disable specific behaviors</div>
                                 </div>
                             </div>
                         </div>

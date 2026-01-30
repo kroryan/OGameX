@@ -18,6 +18,11 @@ use OGame\Enums\BotTargetType;
  * @property \Illuminate\Support\Carbon|null $attack_cooldown_until
  * @property string $priority_target_type
  * @property int $max_fleets_sent
+ * @property array|null $activity_schedule
+ * @property array|null $action_probabilities
+ * @property array|null $economy_settings
+ * @property array|null $fleet_settings
+ * @property array|null $behavior_flags
  * @property \Illuminate\Support\Carbon $created_at
  * @property \Illuminate\Support\Carbon $updated_at
  * @property-read User $user
@@ -34,6 +39,11 @@ class Bot extends Model
         'attack_cooldown_until',
         'priority_target_type',
         'max_fleets_sent',
+        'activity_schedule',
+        'action_probabilities',
+        'economy_settings',
+        'fleet_settings',
+        'behavior_flags',
     ];
 
     protected $casts = [
@@ -41,6 +51,11 @@ class Bot extends Model
         'last_action_at' => 'datetime',
         'attack_cooldown_until' => 'datetime',
         'max_fleets_sent' => 'integer',
+        'activity_schedule' => 'array',
+        'action_probabilities' => 'array',
+        'economy_settings' => 'array',
+        'fleet_settings' => 'array',
+        'behavior_flags' => 'array',
     ];
 
     /**
@@ -60,11 +75,37 @@ class Bot extends Model
     }
 
     /**
-     * Check if the bot is currently active.
+     * Check if the bot is currently active (considering schedule).
      */
     public function isActive(): bool
     {
-        return $this->is_active;
+        if (!$this->is_active) {
+            return false;
+        }
+
+        // Check activity schedule
+        if ($this->activity_schedule !== null) {
+            $now = now();
+            $currentHour = (int)$now->format('H');
+            $currentDay = strtolower($now->format('l'));
+
+            // Check if bot is active at this time
+            $schedule = $this->activity_schedule;
+            if (isset($schedule['active_hours'])) {
+                $activeHours = $schedule['active_hours'];
+                if (!in_array($currentHour, $activeHours)) {
+                    return false; // Outside active hours
+                }
+            }
+
+            if (isset($schedule['inactive_days'])) {
+                if (in_array($currentDay, $schedule['inactive_days'])) {
+                    return false; // Inactive day
+                }
+            }
+        }
+
+        return true;
     }
 
     /**
@@ -72,11 +113,95 @@ class Bot extends Model
      */
     public function canAttack(): bool
     {
+        if (!$this->isActive()) {
+            return false;
+        }
+
         if ($this->attack_cooldown_until === null) {
             return true;
         }
 
         return $this->attack_cooldown_until->isPast();
+    }
+
+    /**
+     * Check if bot should skip action based on behavior flags.
+     */
+    public function shouldSkipAction(string $actionType): bool
+    {
+        if ($this->behavior_flags === null) {
+            return false;
+        }
+
+        $flags = $this->behavior_flags;
+
+        // Skip certain actions if disabled
+        if (isset($flags['disabled_actions']) && in_array($actionType, $flags['disabled_actions'])) {
+            return true;
+        }
+
+        // Skip actions if resources are low
+        if (isset($flags['min_resources_for_actions'])) {
+            $min = $flags['min_resources_for_actions'];
+            // Check if bot has enough resources
+            // This will be checked in the action itself
+        }
+
+        return false;
+    }
+
+    /**
+     * Get action probabilities for this bot.
+     */
+    public function getActionProbabilities(): array
+    {
+        $default = [
+            'build' => 30,
+            'fleet' => 25,
+            'attack' => 20,
+            'research' => 25,
+        ];
+
+        $personalityWeights = match ($this->getPersonalityEnum()) {
+            BotPersonality::AGGRESSIVE => ['build' => 20, 'fleet' => 35, 'attack' => 35, 'research' => 10],
+            BotPersonality::DEFENSIVE => ['build' => 40, 'fleet' => 25, 'attack' => 10, 'research' => 25],
+            BotPersonality::ECONOMIC => ['build' => 50, 'fleet' => 15, 'attack' => 5, 'research' => 30],
+            BotPersonality::BALANCED => ['build' => 30, 'fleet' => 25, 'attack' => 20, 'research' => 25],
+        };
+
+        return $this->action_probabilities ?? $personalityWeights;
+    }
+
+    /**
+     * Get economy settings for this bot.
+     */
+    public function getEconomySettings(): array
+    {
+        $default = [
+            'save_for_upgrade_percent' => 0.3, // Save 30% of production for upgrades
+            'min_resources_for_actions' => 10000, // Minimum resources to perform actions
+            'max_storage_before_spending' => 0.9, // Only spend if storage is 90% full
+            'prioritize_production' => 'balanced', // 'balanced', 'metal', 'crystal', 'deuterium'
+        ];
+
+        return $this->economy_settings ?? $default;
+    }
+
+    /**
+     * Get fleet settings for this bot.
+     */
+    public function getFleetSettings(): array
+    {
+        $default = [
+            'attack_fleet_percentage' => 0.7, // Percentage of fleet to send in attacks
+            'expedition_fleet_percentage' => 0.3, // Percentage of fleet to send on expeditions
+            'min_fleet_size_for_attack' => 100, // Minimum fleet points to attack
+            'prefer_fast_ships' => false, // Prefer faster ships over powerful ones
+            'always_include_recyclers' => true, // Always include recyclers in attacks
+            'max_expedition_fleet_cost_percentage' => 0.2, // Max 20% of fleet value for expeditions
+        ];
+
+        return $this->fleet_settings ?? $default;
     }
 
     /**
@@ -97,11 +222,27 @@ class Bot extends Model
     }
 
     /**
+     * Get the personality (convenience method).
+     */
+    public function getPersonality(): BotPersonality
+    {
+        return $this->getPersonalityEnum();
+    }
+
+    /**
      * Get the target type as an enum.
      */
     public function getTargetTypeEnum(): BotTargetType
     {
         return BotTargetType::from($this->priority_target_type);
+    }
+
+    /**
+     * Get the target type (convenience method).
+     */
+    public function getTargetType(): BotTargetType
+    {
+        return $this->getTargetTypeEnum();
     }
 
     /**

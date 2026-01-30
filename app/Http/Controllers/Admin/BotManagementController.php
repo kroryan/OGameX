@@ -121,14 +121,38 @@ class BotManagementController extends OGameController
             'personality' => 'required|in:aggressive,defensive,economic,balanced',
             'priority_target_type' => 'required|in:random,weak,rich,similar',
             'max_fleets_sent' => 'nullable|integer|min:1|max:10',
+            'activity_schedule' => 'nullable|json',
+            'action_probabilities' => 'nullable|json',
+            'economy_settings' => 'nullable|json',
+            'fleet_settings' => 'nullable|json',
+            'behavior_flags' => 'nullable|json',
         ]);
 
-        $bot->update([
+        $updateData = [
             'name' => $validated['name'],
             'personality' => $validated['personality'],
             'priority_target_type' => $validated['priority_target_type'],
             'max_fleets_sent' => $validated['max_fleets_sent'] ?? 3,
-        ]);
+        ];
+
+        // Add JSON fields if provided and not empty
+        if (!empty($validated['activity_schedule'])) {
+            $updateData['activity_schedule'] = json_decode($validated['activity_schedule'], true);
+        }
+        if (!empty($validated['action_probabilities'])) {
+            $updateData['action_probabilities'] = json_decode($validated['action_probabilities'], true);
+        }
+        if (!empty($validated['economy_settings'])) {
+            $updateData['economy_settings'] = json_decode($validated['economy_settings'], true);
+        }
+        if (!empty($validated['fleet_settings'])) {
+            $updateData['fleet_settings'] = json_decode($validated['fleet_settings'], true);
+        }
+        if (!empty($validated['behavior_flags'])) {
+            $updateData['behavior_flags'] = json_decode($validated['behavior_flags'], true);
+        }
+
+        $bot->update($updateData);
 
         return redirect()
             ->route('admin.bots.index')

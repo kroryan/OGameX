@@ -92,6 +92,65 @@ OGameX is under active development with a lot of core features already implement
 - Admin panel
 - Expedition mission with various outcomes
 - Basic dark matter features (non-commercial)
+- **Playerbots System**
+  - Automated AI players with customizable personalities
+  - Smart decision-making for building, research, fleet management, and attacks
+  - Admin panel for monitoring and controlling bots
+  - Full activity logging and statistics
+  - See [Playerbots System](#playerbots) for more details
+
+### <a name="playerbots"></a> Playerbots System
+
+OGameX includes a comprehensive playerbots system that allows you to create automated AI players. These bots can play autonomously, making intelligent decisions based on their personality and configuration.
+
+#### Features
+
+- **4 Personality Types**: Each bot has a unique personality that affects its decision-making
+  - **Aggressive**: Focused on combat and fleet building (35% fleet, 35% attack)
+  - **Defensive**: Focused on defenses and production (40% build, 25% fleet)
+  - **Economic**: Focused on resource production and research (50% build, 30% research)
+  - **Balanced**: Well-rounded approach to all aspects (30% build, 25% fleet, 20% attack, 25% research)
+
+- **Smart Decision Making**:
+  - Building prioritization based on personality and level curves
+  - Technology research priority system
+  - Profitable target finding with power comparison
+  - Fleet composition based on personality
+  - Resource management with save percentages
+
+- **Target Selection**: Bots can prefer different types of targets
+  - Random targets
+  - Weaker players
+  - Richer players
+  - Players with similar strength
+
+- **Advanced Configuration** (JSON):
+  - Activity schedules (specific hours and days)
+  - Custom action probabilities
+  - Economy settings (resource saving thresholds)
+  - Fleet settings (attack percentages, ship preferences)
+  - Behavior flags (disable specific actions, set minimums)
+
+- **Admin Panel** (`/admin/bots`):
+  - Create, edit, and delete bots
+  - View detailed logs of all bot actions
+  - Force specific actions (build, fleet, research, attack)
+  - View global statistics and activity charts
+  - Toggle bots on/off
+
+- **Scheduler Command**: Process all active bots periodically
+  ```bash
+  docker compose exec -T ogamex-app php artisan ogamex:scheduler:process-bots
+  ```
+
+#### Usage
+
+1. Create a bot from the admin panel (`/admin/bots/create`)
+2. Configure its personality and target preferences
+3. The scheduler will automatically process active bots every 5 minutes (configurable)
+4. Monitor bot activity through the logs and stats pages
+
+For detailed documentation, see [docs/guia-bots.md](docs/guia-bots.md) (Spanish).
 
 ### <a name="upcoming-features"></a> Upcoming Features
 

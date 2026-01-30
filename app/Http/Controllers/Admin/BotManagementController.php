@@ -121,11 +121,32 @@ class BotManagementController extends OGameController
             'personality' => 'required|in:aggressive,defensive,economic,balanced',
             'priority_target_type' => 'required|in:random,weak,rich,similar',
             'max_fleets_sent' => 'nullable|integer|min:1|max:10',
-            'activity_schedule' => 'nullable|json',
-            'action_probabilities' => 'nullable|json',
-            'economy_settings' => 'nullable|json',
-            'fleet_settings' => 'nullable|json',
-            'behavior_flags' => 'nullable|json',
+            // Activity schedule
+            'active_hours' => 'nullable|array',
+            'active_hours.*' => 'integer|min:0|max:23',
+            'inactive_days' => 'nullable|array',
+            'inactive_days.*' => 'string|in:monday,tuesday,wednesday,thursday,friday,saturday,sunday',
+            // Action probabilities
+            'prob_build' => 'nullable|integer|min:0|max:100',
+            'prob_fleet' => 'nullable|integer|min:0|max:100',
+            'prob_attack' => 'nullable|integer|min:0|max:100',
+            'prob_research' => 'nullable|integer|min:0|max:100',
+            // Economy settings
+            'economy_save_percent' => 'nullable|numeric|min:0|max:1',
+            'economy_min_resources' => 'nullable|integer|min:0',
+            'economy_max_storage' => 'nullable|numeric|min:0|max:1',
+            'economy_prioritize' => 'nullable|string|in:balanced,metal,crystal,deuterium',
+            // Fleet settings
+            'fleet_attack_percent' => 'nullable|numeric|min:0|max:1',
+            'fleet_expedition_percent' => 'nullable|numeric|min:0|max:1',
+            'fleet_min_size' => 'nullable|integer|min:0',
+            'fleet_prefer_fast' => 'nullable|boolean',
+            'fleet_recyclers' => 'nullable|boolean',
+            // Behavior flags
+            'disabled_actions' => 'nullable|array',
+            'disabled_actions.*' => 'string|in:trade,expedition',
+            'avoid_stronger' => 'nullable|boolean',
+            'max_planets' => 'nullable|integer|min:1|max:15',
         ]);
 
         $updateData = [
@@ -135,21 +156,88 @@ class BotManagementController extends OGameController
             'max_fleets_sent' => $validated['max_fleets_sent'] ?? 3,
         ];
 
-        // Add JSON fields if provided and not empty
-        if (!empty($validated['activity_schedule'])) {
-            $updateData['activity_schedule'] = json_decode($validated['activity_schedule'], true);
+        // Build activity schedule
+        $activitySchedule = [];
+        if (isset($validated['active_hours']) && !empty($validated['active_hours'])) {
+            $activitySchedule['active_hours'] = array_map('intval', $validated['active_hours']);
         }
-        if (!empty($validated['action_probabilities'])) {
-            $updateData['action_probabilities'] = json_decode($validated['action_probabilities'], true);
+        if (isset($validated['inactive_days']) && !empty($validated['inactive_days'])) {
+            $activitySchedule['inactive_days'] = $validated['inactive_days'];
         }
-        if (!empty($validated['economy_settings'])) {
-            $updateData['economy_settings'] = json_decode($validated['economy_settings'], true);
+        if (!empty($activitySchedule)) {
+            $updateData['activity_schedule'] = $activitySchedule;
         }
-        if (!empty($validated['fleet_settings'])) {
-            $updateData['fleet_settings'] = json_decode($validated['fleet_settings'], true);
+
+        // Build action probabilities
+        $actionProbs = [];
+        if (isset($validated['prob_build']) && $validated['prob_build'] > 0) {
+            $actionProbs['build'] = (int)$validated['prob_build'];
         }
-        if (!empty($validated['behavior_flags'])) {
-            $updateData['behavior_flags'] = json_decode($validated['behavior_flags'], true);
+        if (isset($validated['prob_fleet']) && $validated['prob_fleet'] > 0) {
+            $actionProbs['fleet'] = (int)$validated['prob_fleet'];
+        }
+        if (isset($validated['prob_attack']) && $validated['prob_attack'] > 0) {
+            $actionProbs['attack'] = (int)$validated['prob_attack'];
+        }
+        if (isset($validated['prob_research']) && $validated['prob_research'] > 0) {
+            $actionProbs['research'] = (int)$validated['prob_research'];
+        }
+        if (!empty($actionProbs)) {
+            $updateData['action_probabilities'] = $actionProbs;
+        }
+
+        // Build economy settings
+        $economySettings = [];
+        if (isset($validated['economy_save_percent']) && $validated['economy_save_percent'] !== '') {
+            $economySettings['save_for_upgrade_percent'] = (float)$validated['economy_save_percent'];
+        }
+        if (isset($validated['economy_min_resources']) && $validated['economy_min_resources'] !== '') {
+            $economySettings['min_resources_for_actions'] = (int)$validated['economy_min_resources'];
+        }
+        if (isset($validated['economy_max_storage']) && $validated['economy_max_storage'] !== '') {
+            $economySettings['max_storage_before_spending'] = (float)$validated['economy_max_storage'];
+        }
+        if (isset($validated['economy_prioritize']) && $validated['economy_prioritize'] !== '') {
+            $economySettings['prioritize_production'] = $validated['economy_prioritize'];
+        }
+        if (!empty($economySettings)) {
+            $updateData['economy_settings'] = $economySettings;
+        }
+
+        // Build fleet settings
+        $fleetSettings = [];
+        if (isset($validated['fleet_attack_percent']) && $validated['fleet_attack_percent'] !== '') {
+            $fleetSettings['attack_fleet_percentage'] = (float)$validated['fleet_attack_percent'];
+        }
+        if (isset($validated['fleet_expedition_percent']) && $validated['fleet_expedition_percent'] !== '') {
+            $fleetSettings['expedition_fleet_percentage'] = (float)$validated['fleet_expedition_percent'];
+        }
+        if (isset($validated['fleet_min_size']) && $validated['fleet_min_size'] !== '') {
+            $fleetSettings['min_fleet_size_for_attack'] = (int)$validated['fleet_min_size'];
+        }
+        if (isset($validated['fleet_prefer_fast']) && $validated['fleet_prefer_fast'] !== null) {
+            $fleetSettings['prefer_fast_ships'] = true;
+        }
+        if (isset($validated['fleet_recyclers']) && $validated['fleet_recyclers'] !== null) {
+            $fleetSettings['always_include_recyclers'] = true;
+        }
+        if (!empty($fleetSettings)) {
+            $updateData['fleet_settings'] = $fleetSettings;
+        }
+
+        // Build behavior flags
+        $behaviorFlags = [];
+        if (isset($validated['disabled_actions']) && !empty($validated['disabled_actions'])) {
+            $behaviorFlags['disabled_actions'] = $validated['disabled_actions'];
+        }
+        if (isset($validated['avoid_stronger']) && $validated['avoid_stronger'] !== null) {
+            $behaviorFlags['avoid_stronger_players'] = true;
+        }
+        if (isset($validated['max_planets']) && $validated['max_planets'] !== '') {
+            $behaviorFlags['max_planets_to_colonize'] = (int)$validated['max_planets'];
+        }
+        if (!empty($behaviorFlags)) {
+            $updateData['behavior_flags'] = $behaviorFlags;
         }
 
         $bot->update($updateData);

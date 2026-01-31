@@ -41,7 +41,13 @@ class BotDecisionService
         $state['has_attack_target'] = cache()->remember(
             "bot:{$botId}:has_attack_target",
             now()->addMinutes(5),
-            fn() => $this->botService->findTarget() !== null
+            function () {
+                try {
+                    return $this->botService->findTarget() !== null;
+                } catch (\Exception) {
+                    return false;
+                }
+            }
         );
 
         // Adaptive tuning based on live metrics
@@ -113,7 +119,8 @@ class BotDecisionService
         }
 
         // Attack is only available if not on cooldown and has fleet
-        if (!$this->botService->shouldSkipAction('attack') && $this->botService->canAttack() && $this->botService->hasFleetSlotsAvailable() && $state['has_significant_fleet'] && !empty($state['has_attack_target'])) {
+        $slotUsage = (float) ($state['fleet_slot_usage'] ?? 0.0);
+        if (!$this->botService->shouldSkipAction('attack') && $this->botService->canAttack() && $this->botService->hasFleetSlotsAvailable() && $state['has_significant_fleet'] && !empty($state['has_attack_target']) && $slotUsage < 0.9) {
             $actions[] = BotActionType::ATTACK;
         }
 
@@ -235,6 +242,9 @@ class BotDecisionService
                 if (empty($state['fleet_slots_available'])) {
                     $modifier *= 0.4;
                 }
+                if (($state['fleet_slot_usage'] ?? 0.0) > 0.8) {
+                    $modifier *= 0.6;
+                }
                 break;
 
             case 'attack':
@@ -251,6 +261,9 @@ class BotDecisionService
                 }
                 if (empty($state['has_attack_target'])) {
                     $modifier *= 0.4;
+                }
+                if (($state['fleet_slot_usage'] ?? 0.0) > 0.85) {
+                    $modifier *= 0.5;
                 }
                 break;
 

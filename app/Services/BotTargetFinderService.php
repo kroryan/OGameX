@@ -28,6 +28,10 @@ class BotTargetFinderService
         if (!config('bots.allow_target_bots', true)) {
             $botUserIds = \OGame\Models\Bot::pluck('user_id')->toArray();
         }
+        $avoidUserIds = $bot->getAvoidTargetUserIds();
+        if (!empty($avoidUserIds)) {
+            $botUserIds = array_values(array_unique(array_merge($botUserIds, $avoidUserIds)));
+        }
         $selfId = $bot->getPlayer()->getId();
 
         return match ($targetType) {

@@ -268,6 +268,32 @@ Cuando el bot crece rápido:
 - Aumenta prioridad de flota y ataques.
 - Mantiene build/research en niveles sanos.
 
+### Estrategia Multi‑planeta
+
+Los bots asignan roles a los planetas para especializar su crecimiento:
+- **economy**: minas, energía y almacenes.
+- **fleet**: astillero, robótica, nanita y producción de flota.
+- **defense**: silos, defensa por capas y soporte defensivo.
+- **research**: laboratorio y soporte de investigación.
+- **colony**: crecimiento básico y preparación de expansión.
+
+Estos roles influyen en:
+- **Construcción** (prioridades por planeta).
+- **Producción de flota/defensa** (planetario).
+- **Transporte interno** (economy → fleet).
+
+### Inteligencia de objetivos y guerra
+
+- Memoria de objetivos: evita enemigos demasiado fuertes o poco rentables durante un tiempo.
+- Preferencia por objetivos conocidos con mejor **loot/defensa** (inteligencia de espionaje).
+- Coordinación básica de alianzas: cuando un bot ataca comparte objetivo con aliados por un tiempo.
+
+### Economía avanzada
+
+- Ajuste dinámico por presión de almacenamiento.
+- Gestión de energía (prioriza plantas y satélites si hay déficit).
+- Balance entre recursos y gasto inteligente en early game para evitar estancamientos.
+
 #### fleet_settings (Configuración de Flota)
 ```json
 {

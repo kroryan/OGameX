@@ -725,68 +725,63 @@ class BotService
     public function buildRandomStructure(): bool
     {
         try {
-            // Smart planet selection: use planet with lowest storage AND available queue space
-            $planet = $this->getLowestStoragePlanet();
-
-            // If that planet has full queue, find another with space
-            if ($planet !== null && $this->isBuildingQueueFull($planet)) {
-                $planet = $this->findPlanetWithBuildingQueueSpace();
-            }
-
-            if ($planet === null) {
-                $this->logAction(BotActionType::BUILD, 'No planets available or all building queues full', [], 'failed');
+            $planets = $this->player->planets->all();
+            if (empty($planets)) {
+                $this->logAction(BotActionType::BUILD, 'No planets available', [], 'failed');
                 return false;
             }
 
-            if (!$this->hasPlanetFieldSpace($planet)) {
-                if ($this->canUpgradeTerraformer($planet)) {
-                    return $this->buildTerraformer($planet);
-                }
-
-                $this->logAction(BotActionType::BUILD, 'Planet fields full and terraformer unavailable', [
-                    'planet' => $planet->getPlanetName(),
-                ], 'failed');
-                return false;
-            }
-
-            // Get buildable buildings with smart prioritization
+            $roles = $this->getPlanetRoles();
             $buildings = [...ObjectService::getBuildingObjects(), ...ObjectService::getStationObjects()];
             $affordableBuildings = [];
 
-            foreach ($buildings as $building) {
-                $currentLevel = $planet->getObjectLevel($building->machine_name);
-
-                // Skip very high levels
-                if ($currentLevel >= config('bots.max_building_level', 30)) {
+            foreach ($planets as $planet) {
+                if ($this->isBuildingQueueFull($planet)) {
                     continue;
                 }
 
-                if (!$this->hasPlanetFieldSpace($planet) && ($building->consumesPlanetField ?? true)) {
+                if (!$this->hasPlanetFieldSpace($planet)) {
+                    if ($this->canUpgradeTerraformer($planet)) {
+                        return $this->buildTerraformer($planet);
+                    }
                     continue;
                 }
 
-                // Skip if we can't afford it
-                $price = ObjectService::getObjectPrice($building->machine_name, $planet);
-                $cost = $price->metal->get() + $price->crystal->get() + $price->deuterium->get();
+                foreach ($buildings as $building) {
+                    $currentLevel = $planet->getObjectLevel($building->machine_name);
 
-                $economy = $this->bot->getEconomySettings();
-                $resources = $planet->getResources();
-                $maxToSpend = ($resources->metal->get() + $resources->crystal->get() + $resources->deuterium->get())
-                             * (1 - $economy['save_for_upgrade_percent']);
+                    // Skip very high levels
+                    if ($currentLevel >= config('bots.max_building_level', 30)) {
+                        continue;
+                    }
 
-                if ($cost > $maxToSpend) {
-                    continue;
+                    if (!$this->hasPlanetFieldSpace($planet) && ($building->consumesPlanetField ?? true)) {
+                        continue;
+                    }
+
+                    $price = ObjectService::getObjectPrice($building->machine_name, $planet);
+                    $cost = $price->metal->get() + $price->crystal->get() + $price->deuterium->get();
+
+                    $economy = $this->bot->getEconomySettings();
+                    $resources = $planet->getResources();
+                    $maxToSpend = ($resources->metal->get() + $resources->crystal->get() + $resources->deuterium->get())
+                                 * (1 - $economy['save_for_upgrade_percent']);
+
+                    if ($cost > $maxToSpend) {
+                        continue;
+                    }
+
+                    $priority = $this->getBuildingPriority($building->machine_name, $planet, $currentLevel);
+                    $roleBonus = $this->getRoleBonusForBuilding($roles[$planet->getPlanetId()] ?? 'colony', $building->machine_name);
+                    $score = ($priority + $roleBonus) * 1000 - $cost;
+
+                    $affordableBuildings[] = [
+                        'building' => $building,
+                        'planet' => $planet,
+                        'score' => $score,
+                        'cost' => $cost,
+                    ];
                 }
-
-                // Prioritize: production buildings > storage > others
-                $priority = $this->getBuildingPriority($building->machine_name, $planet, $currentLevel);
-                $score = $priority * 1000 - $cost;
-
-                $affordableBuildings[] = [
-                    'building' => $building,
-                    'score' => $score,
-                    'cost' => $cost,
-                ];
             }
 
             if (empty($affordableBuildings)) {
@@ -799,7 +794,9 @@ class BotService
 
             // Pick from top 3 buildings (some randomness)
             $topBuildings = array_slice($affordableBuildings, 0, min(3, count($affordableBuildings)));
-            $building = $topBuildings[array_rand($topBuildings)]['building'];
+            $choice = $topBuildings[array_rand($topBuildings)];
+            $building = $choice['building'];
+            $planet = $choice['planet'];
 
             // Build it
             $queueService = app(BuildingQueueService::class);
@@ -939,6 +936,17 @@ class BotService
             $base += (5 - $currentLevel) * 8; // +40 for level 0, +32 for level 1, etc.
         } elseif ($currentLevel >= 20) {
             $base -= ($currentLevel - 20) * 3; // Reduce priority for very high levels
+        }
+
+        // Energy deficit: prioritize energy buildings
+        try {
+            if ($planet->energy()->get() < 0) {
+                if (in_array($machineName, ['solar_plant', 'fusion_plant'])) {
+                    $base += 45;
+                }
+            }
+        } catch (Exception) {
+            // Ignore energy errors
         }
 
         // Storage urgency: if storage is nearly full, prioritize spending
@@ -1098,7 +1106,7 @@ class BotService
                     continue;
                 }
 
-                $unitScore = $this->getUnitScore($unit->machine_name, $maxAmount);
+                $unitScore = $this->getUnitScore($unit->machine_name, $maxAmount, $planet);
                 $affordableUnits[] = [
                     'unit' => $unit,
                     'amount' => $maxAmount,
@@ -1145,6 +1153,15 @@ class BotService
             return null;
         }
 
+        $role = $this->isUnderThreat() ? 'defense' : 'fleet';
+        $preferred = $this->getPlanetByRole($role);
+        if ($preferred && !$this->isUnitQueueFull($preferred)) {
+            $budget = $this->getSpendableBudget($preferred);
+            if ($budget > 0 && $this->hasAffordableUnitOnPlanet($preferred, $budget)) {
+                return $preferred;
+            }
+        }
+
         $bestPlanet = null;
         $bestBudget = 0.0;
         foreach ($planets as $planet) {
@@ -1168,6 +1185,97 @@ class BotService
         }
 
         return $bestPlanet;
+    }
+
+    private function getPlanetByRole(string $role): ?PlanetService
+    {
+        $roles = $this->getPlanetRoles();
+        foreach ($this->player->planets->all() as $planet) {
+            if (($roles[$planet->getPlanetId()] ?? null) === $role) {
+                return $planet;
+            }
+        }
+        return null;
+    }
+
+    private function getPlanetRoles(): array
+    {
+        $cacheKey = 'bot_planet_roles_' . $this->bot->id;
+        $cached = cache()->get($cacheKey);
+        if (is_array($cached)) {
+            return $cached;
+        }
+
+        $planets = $this->player->planets->all();
+        $roles = [];
+        if (count($planets) <= 1) {
+            foreach ($planets as $planet) {
+                $roles[$planet->getPlanetId()] = 'primary';
+            }
+            cache()->put($cacheKey, $roles, now()->addMinutes(30));
+            return $roles;
+        }
+
+        $production = [];
+        $shipyardScore = [];
+        $defenseScore = [];
+        $researchScore = [];
+        foreach ($planets as $planet) {
+            $production[$planet->getPlanetId()] = $planet->getResources()->metal->get()
+                + $planet->getResources()->crystal->get()
+                + $planet->getResources()->deuterium->get();
+            $shipyardScore[$planet->getPlanetId()] = $planet->getObjectLevel('shipyard')
+                + $planet->getObjectLevel('robot_factory')
+                + $planet->getObjectLevel('nano_factory');
+            $defenseScore[$planet->getPlanetId()] = $planet->getObjectAmount('rocket_launcher')
+                + $planet->getObjectAmount('light_laser')
+                + $planet->getObjectAmount('heavy_laser')
+                + $planet->getObjectAmount('gauss_cannon')
+                + $planet->getObjectAmount('ion_cannon')
+                + $planet->getObjectAmount('plasma_turret');
+            $researchScore[$planet->getPlanetId()] = $planet->getObjectLevel('research_lab');
+        }
+
+        $economyId = array_key_first(collect($production)->sortDesc()->toArray());
+        $fleetId = array_key_first(collect($shipyardScore)->sortDesc()->toArray());
+        $defenseId = array_key_first(collect($defenseScore)->sortDesc()->toArray());
+        $researchId = array_key_first(collect($researchScore)->sortDesc()->toArray());
+
+        foreach ($planets as $planet) {
+            $id = $planet->getPlanetId();
+            $roles[$id] = 'colony';
+        }
+        if ($economyId) {
+            $roles[$economyId] = 'economy';
+        }
+        if ($fleetId) {
+            $roles[$fleetId] = 'fleet';
+        }
+        if ($defenseId) {
+            $roles[$defenseId] = 'defense';
+        }
+        if ($researchId) {
+            $roles[$researchId] = 'research';
+        }
+
+        cache()->put($cacheKey, $roles, now()->addMinutes(30));
+        return $roles;
+    }
+
+    private function getRoleBonusForBuilding(string $role, string $machineName): int
+    {
+        $economyBuildings = ['metal_mine', 'crystal_mine', 'deuterium_synthesizer', 'solar_plant', 'fusion_plant', 'metal_store', 'crystal_store', 'deuterium_store', 'terraformer'];
+        $fleetBuildings = ['shipyard', 'robot_factory', 'nano_factory', 'space_dock'];
+        $defenseBuildings = ['missile_silo', 'space_dock'];
+        $researchBuildings = ['research_lab', 'intergalactic_research_network'];
+
+        return match ($role) {
+            'economy' => in_array($machineName, $economyBuildings) ? 25 : 0,
+            'fleet' => in_array($machineName, $fleetBuildings) ? 25 : 0,
+            'defense' => in_array($machineName, $defenseBuildings) ? 25 : 0,
+            'research' => in_array($machineName, $researchBuildings) ? 25 : 0,
+            default => 0,
+        };
     }
 
     private function hasAffordableUnitOnPlanet(PlanetService $planet, float $budget): bool
@@ -1210,7 +1318,7 @@ class BotService
     /**
      * Get unit score for bot decision making.
      */
-    private function getUnitScore(string $machineName, int $amount): int
+    private function getUnitScore(string $machineName, int $amount, ?PlanetService $planet = null): int
     {
         // Unit priorities based on personality
         $personality = $this->getPersonality();
@@ -1269,6 +1377,34 @@ class BotService
             $base += 40;
         }
 
+        if ($planet && $machineName === 'solar_satellite') {
+            try {
+                if ($planet->energy()->get() < 0 && !$this->isUnderThreat()) {
+                    $base += 25;
+                }
+            } catch (Exception) {
+                // Ignore
+            }
+        }
+
+        if ($planet && in_array($machineName, ['interplanetary_missile', 'anti_ballistic_missile'])) {
+            try {
+                if ($planet->getObjectLevel('missile_silo') > 0) {
+                    $base += 15;
+                }
+            } catch (Exception) {
+                // Ignore
+            }
+        }
+
+        if ($planet && $machineName === 'colony_ship') {
+            $roles = $this->getPlanetRoles();
+            $role = $roles[$planet->getPlanetId()] ?? 'colony';
+            if ($role === 'colony' || $role === 'economy') {
+                $base += 15;
+            }
+        }
+
         // Amount bonus (bulk is good)
         $amountBonus = min(20, $amount / 10);
 
@@ -1283,13 +1419,18 @@ class BotService
         if (!$this->hasFleetSlotsAvailable()) {
             return false;
         }
+        if ($this->getFleetSlotUsage() > 0.8) {
+            return false;
+        }
         $planets = $this->player->planets->all();
         if (count($planets) < 2) {
             return false;
         }
 
-        $richest = $this->getRichestPlanet();
-        $lowest = $this->getLowestStoragePlanet();
+        $economyPlanet = $this->getPlanetByRole('economy');
+        $fleetPlanet = $this->getPlanetByRole('fleet');
+        $richest = $economyPlanet ?? $this->getRichestPlanet();
+        $lowest = $fleetPlanet ?? $this->getLowestStoragePlanet();
         if ($richest === null || $lowest === null || $richest->getPlanetId() === $lowest->getPlanetId()) {
             return false;
         }
@@ -1302,6 +1443,15 @@ class BotService
         return $richUsage >= $maxStorageBeforeSpending && $lowUsage < 0.6;
     }
 
+    private function getFleetSlotUsage(): float
+    {
+        $max = $this->player->getFleetSlotsMax();
+        if ($max <= 0) {
+            return 1.0;
+        }
+        return $this->player->getFleetSlotsInUse() / $max;
+    }
+
     public function sendResourceTransport(): bool
     {
         try {
@@ -1310,8 +1460,8 @@ class BotService
                 return false;
             }
 
-            $source = $this->getRichestPlanet();
-            $target = $this->getLowestStoragePlanet();
+            $source = $this->getPlanetByRole('economy') ?? $this->getRichestPlanet();
+            $target = $this->getPlanetByRole('fleet') ?? $this->getLowestStoragePlanet();
             if ($source === null || $target === null || $source->getPlanetId() === $target->getPlanetId()) {
                 $this->logAction(BotActionType::TRADE, 'No valid transport target', [], 'failed');
                 return false;
@@ -1666,6 +1816,7 @@ class BotService
             }
 
             if ($report = $this->getLatestEspionageReport($target)) {
+                $this->recordTargetIntel($report, $target);
                 $reportPower = $this->calculateReportDefensePower($report);
                 if ($reportPower > 0 && $reportPower > $this->calculateFleetPower($source) * 1.2) {
                     $this->logAction(BotActionType::ATTACK, 'Espionage report indicates target too strong', [
@@ -1697,6 +1848,7 @@ class BotService
                     'loot' => $lootEstimate,
                     'capacity' => $cargoCapacity,
                 ], 'failed');
+                $this->addAvoidTargetUserId($target->getPlayer()->getId());
                 return false;
             }
 
@@ -1718,6 +1870,7 @@ class BotService
                     'loot' => $lootEstimate,
                     'consumption' => $consumption,
                 ], 'failed');
+                $this->addAvoidTargetUserId($target->getPlayer()->getId());
                 return false;
             }
 
@@ -1731,6 +1884,7 @@ class BotService
                     'attack_power' => $attackPower,
                     'target_player' => $target->getPlayer()->username,
                 ], 'failed');
+                $this->addAvoidTargetUserId($target->getPlayer()->getId());
                 return false;
             }
 
@@ -1751,6 +1905,8 @@ class BotService
                 'consumption' => $consumption,
                 'target_player' => $target->getPlayer()->username,
             ]);
+
+            $this->setAllianceTargetCoordinates($targetCoords);
 
             // Set cooldown
             $cooldown = config('bots.default_attack_cooldown_hours', 2);
@@ -1844,6 +2000,22 @@ class BotService
         $targetFinder = app(BotTargetFinderService::class);
         $targetType = $this->bot->getTargetTypeEnum();
 
+        $known = $this->getBestKnownTarget();
+        if ($known) {
+            return $known;
+        }
+
+        $allianceTarget = $this->getAllianceTargetCoordinates();
+        if ($allianceTarget !== null) {
+            $planet = \OGame\Models\Planet::where('galaxy', $allianceTarget->galaxy)
+                ->where('system', $allianceTarget->system)
+                ->where('planet', $allianceTarget->position)
+                ->first();
+            if ($planet && !in_array($planet->user_id, $this->getAvoidTargetUserIds(), true) && $planet->user_id !== $this->player->getId()) {
+                return app(\OGame\Factories\PlanetServiceFactory::class)->make($planet->id);
+            }
+        }
+
         // Get candidate targets from target finder
         $candidate = $targetFinder->findTarget($this, $targetType);
 
@@ -1876,6 +2048,60 @@ class BotService
         }
 
         return $candidate;
+    }
+
+    private function recordTargetIntel(EspionageReport $report, PlanetService $target): void
+    {
+        $coords = $target->getPlanetCoordinates();
+        $loot = ($report->resources['metal'] ?? 0) + ($report->resources['crystal'] ?? 0) + ($report->resources['deuterium'] ?? 0);
+        $defense = $this->calculateReportDefensePower($report);
+        $userId = $target->getPlayer()->getId();
+
+        $cacheKey = 'bot_target_intel_' . $this->bot->id;
+        $intel = cache()->get($cacheKey, []);
+        if (!is_array($intel)) {
+            $intel = [];
+        }
+        $intel[$userId] = [
+            'loot' => $loot,
+            'defense' => $defense,
+            'g' => $coords->galaxy,
+            's' => $coords->system,
+            'p' => $coords->position,
+            'ts' => now()->timestamp,
+        ];
+        cache()->put($cacheKey, $intel, now()->addHours(12));
+    }
+
+    private function getBestKnownTarget(): ?PlanetService
+    {
+        $cacheKey = 'bot_target_intel_' . $this->bot->id;
+        $intel = cache()->get($cacheKey, []);
+        if (!is_array($intel) || empty($intel)) {
+            return null;
+        }
+
+        $avoid = $this->getAvoidTargetUserIds();
+        $best = null;
+        foreach ($intel as $userId => $data) {
+            if (in_array($userId, $avoid, true)) {
+                continue;
+            }
+            if (!$best || ($data['loot'] - $data['defense']) > ($best['loot'] - $best['defense'])) {
+                $best = $data + ['user_id' => $userId];
+            }
+        }
+
+        if (!$best) {
+            return null;
+        }
+
+        $planet = \OGame\Models\Planet::where('user_id', $best['user_id'])->first();
+        if (!$planet) {
+            return null;
+        }
+
+        return app(\OGame\Factories\PlanetServiceFactory::class)->make($planet->id);
     }
 
     private function hasRecentEspionageReport(PlanetService $target): bool
@@ -2086,6 +2312,47 @@ class BotService
         } catch (Exception) {
             // Ignore alliance errors
         }
+    }
+
+    public function getAvoidTargetUserIds(): array
+    {
+        $cacheKey = 'bot_avoid_users_' . $this->bot->id;
+        $ids = cache()->get($cacheKey, []);
+        return is_array($ids) ? $ids : [];
+    }
+
+    private function addAvoidTargetUserId(int $userId): void
+    {
+        $cacheKey = 'bot_avoid_users_' . $this->bot->id;
+        $ids = $this->getAvoidTargetUserIds();
+        if (!in_array($userId, $ids, true)) {
+            $ids[] = $userId;
+            cache()->put($cacheKey, $ids, now()->addHours(12));
+        }
+    }
+
+    private function getAllianceTargetCoordinates(): ?\OGame\Models\Planet\Coordinate
+    {
+        $user = $this->player->getUser();
+        if (!$user->alliance_id) {
+            return null;
+        }
+        $key = 'alliance_target_' . $user->alliance_id;
+        $coords = cache()->get($key);
+        if (!is_array($coords)) {
+            return null;
+        }
+        return new \OGame\Models\Planet\Coordinate($coords['g'], $coords['s'], $coords['p']);
+    }
+
+    private function setAllianceTargetCoordinates(\OGame\Models\Planet\Coordinate $coords): void
+    {
+        $user = $this->player->getUser();
+        if (!$user->alliance_id) {
+            return;
+        }
+        $key = 'alliance_target_' . $user->alliance_id;
+        cache()->put($key, ['g' => $coords->galaxy, 's' => $coords->system, 'p' => $coords->position], now()->addMinutes(30));
     }
 
     /**

@@ -96,6 +96,9 @@ class GameStateAnalyzer
         $planetCount = count($planets);
         $maxPlanets = $player->getMaxPlanetAmount();
         $resourceImbalance = $this->calculateResourceImbalance($totalResources);
+        $fleetSlotsMax = $player->getFleetSlotsMax();
+        $fleetSlotsUsed = $player->getFleetSlotsInUse();
+        $fleetSlotUsage = $fleetSlotsMax > 0 ? $fleetSlotsUsed / $fleetSlotsMax : 0.0;
 
         return [
             'total_points' => $totalPoints,
@@ -116,6 +119,9 @@ class GameStateAnalyzer
             'has_significant_fleet' => $fleetPoints > 50000,
             'is_under_threat' => $botService->isUnderThreat(),
             'fleet_slots_available' => $botService->hasFleetSlotsAvailable(),
+            'fleet_slots_used' => $fleetSlotsUsed,
+            'fleet_slots_max' => $fleetSlotsMax,
+            'fleet_slot_usage' => $fleetSlotUsage,
             'is_storage_pressure_high' => $botService->isStoragePressureHigh(),
             'storage_usage_max' => $storageUsageMax,
             'resource_imbalance' => $resourceImbalance,

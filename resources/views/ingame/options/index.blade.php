@@ -206,6 +206,98 @@
                                                 </div>
                                             </div>
                                         </div>
+
+                                        <div class="category fieldwrapper alt bar">
+                                            <label class="styled textBeefy" data-element="botmode">
+                                                Bot mode
+                                            </label>
+                                        </div>
+                                        <div class="group bborder" style="display: block;">
+                                            <input type="hidden" name="bot_mode_present" value="1">
+                                            <div class="fieldwrapper">
+                                                <label class="styled textBeefy">Enable bot mode:</label>
+                                                <div class="thefield">
+                                                    <input type="checkbox" name="bot_mode_enabled" {{ ($bot && $bot->is_active) ? 'checked' : '' }}>
+                                                    <span style="margin-left: 10px; font-size: 0.9em; color: #aaa;">Your account will play automatically using the selected bot profile.</span>
+                                                </div>
+                                            </div>
+                                            <div class="fieldwrapper">
+                                                <label class="styled textBeefy">Bot personality:</label>
+                                                <div class="thefield">
+                                                    <select name="bot_personality" class="textInput w200 textCenter textBeefy">
+                                                        @foreach ($botPersonalities as $personality)
+                                                            <option value="{{ $personality->value }}" {{ ($bot && $bot->personality === $personality->value) || (!$bot && $personality->value === 'balanced') ? 'selected' : '' }}>
+                                                                {{ $personality->getLabel() }}
+                                                            </option>
+                                                        @endforeach
+                                                    </select>
+                                                </div>
+                                            </div>
+                                            <div class="fieldwrapper">
+                                                <label class="styled textBeefy">Target preference:</label>
+                                                <div class="thefield">
+                                                    <select name="bot_target_type" class="textInput w200 textCenter textBeefy">
+                                                        @foreach ($botTargetTypes as $targetType)
+                                                            <option value="{{ $targetType->value }}" {{ ($bot && $bot->priority_target_type === $targetType->value) || (!$bot && $targetType->value === 'random') ? 'selected' : '' }}>
+                                                                {{ $targetType->getLabel() }}
+                                                            </option>
+                                                        @endforeach
+                                                    </select>
+                                                </div>
+                                            </div>
+                                            <div class="fieldwrapper">
+                                                <label class="styled textBeefy">Max fleets in flight:</label>
+                                                <div class="thefield">
+                                                    <input type="text" pattern="[0-9]*" class="textInput w50 textCenter textBeefy"
+                                                           value="{{ $bot ? $bot->max_fleets_sent : 3 }}" size="2" maxlength="2" name="bot_max_fleets_sent">
+                                                </div>
+                                            </div>
+                                            <div class="fieldwrapper">
+                                                <label class="styled textBeefy">Bot logs:</label>
+                                                <div class="thefield">
+                                                    @if ($bot)
+                                                        <a href="{{ route('bot.logs') }}" class="btn_blue" style="display: inline-block; padding: 4px 10px; text-decoration: none;">View full bot logs</a>
+                                                    @else
+                                                        <span style="color: #aaa;">Enable bot mode to generate logs.</span>
+                                                    @endif
+                                                </div>
+                                            </div>
+                                            @if ($bot && $recentBotLogs->count() > 0)
+                                                <div class="fieldwrapper">
+                                                    <label class="styled textBeefy">Recent bot actions:</label>
+                                                    <div class="thefield" style="width: 100%;">
+                                                        <table class="table" style="width: 100%;">
+                                                            <thead>
+                                                                <tr>
+                                                                    <th style="width: 80px;">Time</th>
+                                                                    <th style="width: 100px;">Action</th>
+                                                                    <th>Description</th>
+                                                                    <th style="width: 80px;">Result</th>
+                                                                </tr>
+                                                            </thead>
+                                                            <tbody>
+                                                                @foreach ($recentBotLogs as $log)
+                                                                    <tr>
+                                                                        <td style="font-size: 0.9em;">{{ $log->created_at->format('H:i') }}</td>
+                                                                        <td>{{ ucfirst($log->action_type) }}</td>
+                                                                        <td>{{ $log->action_description }}</td>
+                                                                        <td>
+                                                                            @if ($log->result === 'success')
+                                                                                <span style="color: #0f0;">✓</span>
+                                                                            @elseif ($log->result === 'failed')
+                                                                                <span style="color: #f00;">✗</span>
+                                                                            @else
+                                                                                <span style="color: #fc0;">~</span>
+                                                                            @endif
+                                                                        </td>
+                                                                    </tr>
+                                                                @endforeach
+                                                            </tbody>
+                                                        </table>
+                                                    </div>
+                                                </div>
+                                            @endif
+                                        </div>
                                         <div class="category fieldwrapper alt bar">
                                             <label class="styled textBeefy" data-element="chat">
                                                 Chat

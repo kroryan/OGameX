@@ -6,6 +6,10 @@ use Exception;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\View\View;
+use OGame\Enums\BotPersonality;
+use OGame\Enums\BotTargetType;
+use OGame\Models\Bot;
+use OGame\Models\BotLog;
 use OGame\Services\PlayerService;
 
 class OptionsController extends OGameController
@@ -25,12 +29,21 @@ class OptionsController extends OGameController
             $canUpdateUsername = $lastChange->addWeek()->isPast();
         }
 
+        $bot = Bot::where('user_id', $player->getId())->first();
+        $recentBotLogs = $bot
+            ? BotLog::where('bot_id', $bot->id)->latest()->limit(10)->get()
+            : collect();
+
         return view('ingame.options.index')->with([
             'username' => $player->getUsername(),
             'current_email' => $player->getEmail(),
             'canUpdateUsername' => $canUpdateUsername,
             'player' => $player,
             'espionage_probes_amount' => $player->getEspionageProbesAmount(),
+            'bot' => $bot,
+            'botPersonalities' => BotPersonality::cases(),
+            'botTargetTypes' => BotTargetType::cases(),
+            'recentBotLogs' => $recentBotLogs,
         ]);
     }
 
@@ -139,6 +152,58 @@ class OptionsController extends OGameController
     }
 
     /**
+     * Process bot mode settings for the current player.
+     *
+     * @param Request $request
+     * @param PlayerService $player
+     * @return array<string,string>|null
+     */
+    public function processBotMode(Request $request, PlayerService $player): array|null
+    {
+        if (!array_key_exists('bot_mode_present', $request->all())) {
+            return null;
+        }
+
+        $enabled = $request->boolean('bot_mode_enabled');
+        $personality = $request->input('bot_personality', BotPersonality::BALANCED->value);
+        $targetType = $request->input('bot_target_type', BotTargetType::RANDOM->value);
+        $maxFleets = (int)$request->input('bot_max_fleets_sent', 3);
+        $maxFleets = max(1, min(10, $maxFleets));
+
+        $validPersonality = in_array($personality, array_map(fn ($case) => $case->value, BotPersonality::cases()), true);
+        $validTarget = in_array($targetType, array_map(fn ($case) => $case->value, BotTargetType::cases()), true);
+
+        if (!$validPersonality || !$validTarget) {
+            return array('error' => __('Invalid bot settings.'));
+        }
+
+        $bot = Bot::where('user_id', $player->getId())->first();
+
+        if (!$bot && !$enabled) {
+            return array('success' => __('Bot mode disabled.'));
+        }
+
+        if (!$bot) {
+            $bot = Bot::create([
+                'user_id' => $player->getId(),
+                'name' => $player->getUsername() . ' Bot',
+                'personality' => $personality,
+                'priority_target_type' => $targetType,
+                'max_fleets_sent' => $maxFleets,
+                'is_active' => $enabled,
+            ]);
+        } else {
+            $bot->personality = $personality;
+            $bot->priority_target_type = $targetType;
+            $bot->max_fleets_sent = $maxFleets;
+            $bot->is_active = $enabled;
+            $bot->save();
+        }
+
+        return array('success' => __('Bot mode settings saved.'));
+    }
+
+    /**
      * Save handler for index() form.
      *
      * @param Request $request
@@ -151,7 +216,8 @@ class OptionsController extends OGameController
         $change_handlers = [
             'processChangeUsername',
             'processVacationMode',
-            'processEspionageProbesAmount'
+            'processEspionageProbesAmount',
+            'processBotMode',
         ];
 
         // Loop through change handlers, execute them and if it triggers

@@ -423,6 +423,7 @@ docker compose exec ogamex-app php artisan queue:work --timeout=60
 - Configurable en `config/bots.php`:
   - `default_activity_cycle_minutes`
   - `default_activity_window_minutes`
+- El scheduler ejecuta `ogamex:scheduler:process-bots` cada 5 minutos.
 - Para acelerar desarrollo, puedes reducir `min_resources_for_actions` desde el panel de edición de bots.
 
 ---

@@ -69,6 +69,11 @@ class ProcessBots extends Command
         $botModel = $bot->getBot();
         $this->line("Processing bot: {$botModel->name}");
 
+        if (!$bot->isActive()) {
+            $this->line('  - Skipped: inactive schedule');
+            return;
+        }
+
         // Check if bot has been recently processed
         $lastAction = $botModel->last_action_at;
         $interval = config('bots.scheduler_interval_minutes', 5);

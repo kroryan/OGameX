@@ -5,6 +5,7 @@ use OGame\Console\Commands\Scheduler\DarkMatterRegenerateCommand;
 use OGame\Console\Commands\Scheduler\GenerateAllianceHighscores;
 use OGame\Console\Commands\Scheduler\GenerateHighscoreRanks;
 use OGame\Console\Commands\Scheduler\GenerateHighscores;
+use OGame\Console\Commands\Scheduler\ProcessBots;
 use OGame\Console\Commands\Scheduler\ResetDebrisFields;
 
 /*
@@ -32,3 +33,6 @@ Schedule::command(CleanupWreckFields::class)->hourly()->withoutOverlapping();
 
 // Process Dark Matter regeneration every 5 minutes
 Schedule::command(DarkMatterRegenerateCommand::class)->everyFiveMinutes()->withoutOverlapping();
+
+// Process active bots every 5 minutes
+Schedule::command(ProcessBots::class)->everyFiveMinutes()->withoutOverlapping();

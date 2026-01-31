@@ -72,7 +72,9 @@ class BotServiceFactory
         $services = [];
 
         foreach ($bots as $bot) {
-            $services[] = $this->makeFromBotModel($bot);
+            if ($bot->isActive()) {
+                $services[] = $this->makeFromBotModel($bot);
+            }
         }
 
         return $services;

@@ -4,6 +4,7 @@ namespace OGame\Services;
 
 use Exception;
 use OGame\Enums\BotActionType;
+use OGame\Enums\CharacterClass;
 use OGame\Enums\BotPersonality;
 use OGame\Enums\BotTargetType;
 use OGame\GameObjects\Models\Enums\GameObjectType;
@@ -98,7 +99,24 @@ class BotService
      */
     public function shouldSkipAction(string $actionType): bool
     {
-        return $this->bot->shouldSkipAction($actionType);
+        if ($this->bot->shouldSkipAction($actionType)) {
+            return true;
+        }
+
+        $behavior = $this->bot->behavior_flags ?? [];
+        if (isset($behavior['min_resources_for_actions'])) {
+            $min = (int) $behavior['min_resources_for_actions'];
+            $planet = $this->getRichestPlanet();
+            if ($planet !== null) {
+                $resources = $planet->getResources();
+                $total = $resources->metal->get() + $resources->crystal->get() + $resources->deuterium->get();
+                if ($total < $min) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -427,7 +445,21 @@ class BotService
             return false;
         }
 
-        return count($this->player->planets->all()) < $maxPlanets;
+        $currentPlanets = count($this->player->planets->all());
+        if ($currentPlanets >= $maxPlanets) {
+            return false;
+        }
+
+        // Personality influence: aggressive bots delay colonization until they have a fleet.
+        $personality = $this->getPersonality();
+        if ($personality === BotPersonality::AGGRESSIVE) {
+            $state = (new GameStateAnalyzer())->analyzeCurrentState($this);
+            if (($state['fleet_points'] ?? 0) < 80000) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     public function isUnderThreat(): bool
@@ -445,6 +477,59 @@ class BotService
             ->count();
 
         return $incoming > 0;
+    }
+
+    public function ensureCharacterClass(): void
+    {
+        try {
+            $user = $this->player->getUser();
+            if ($user->character_class !== null) {
+                return;
+            }
+
+            $class = match ($this->getPersonality()) {
+                BotPersonality::AGGRESSIVE => CharacterClass::GENERAL,
+                BotPersonality::ECONOMIC => CharacterClass::COLLECTOR,
+                BotPersonality::DEFENSIVE => CharacterClass::GENERAL,
+                default => CharacterClass::DISCOVERER,
+            };
+
+            $service = app(CharacterClassService::class);
+            $service->selectClass($user, $class);
+        } catch (Exception) {
+            // Ignore class selection errors
+        }
+    }
+
+    public function recallRiskyMissions(): int
+    {
+        try {
+            $missions = FleetMission::where('user_id', $this->player->getId())
+                ->where('processed', 0)
+                ->where('canceled', 0)
+                ->where('time_arrival', '>', now()->timestamp)
+                ->whereIn('mission_type', [1, 3, 8, 15])
+                ->get();
+
+            if ($missions->isEmpty()) {
+                return 0;
+            }
+
+            $fleetMissionService = app(FleetMissionService::class);
+            $count = 0;
+            foreach ($missions as $mission) {
+                $fleetMissionService->cancelMission($mission);
+                $count++;
+            }
+
+            if ($count > 0) {
+                $this->logAction(BotActionType::FLEET, "Recalled {$count} missions due to threat", []);
+            }
+
+            return $count;
+        } catch (Exception) {
+            return 0;
+        }
     }
 
     public function shouldFleetSaveBySchedule(): bool
@@ -531,7 +616,7 @@ class BotService
         return true;
     }
 
-    public function performFleetSave(): bool
+    public function performFleetSave(bool $allowHolding = false): bool
     {
         try {
             if (!$this->hasFleetSlotsAvailable()) {
@@ -572,6 +657,11 @@ class BotService
                 return false;
             }
 
+            $holdingHours = 0;
+            if ($allowHolding && !$this->isUnderThreat()) {
+                $holdingHours = rand(1, 3);
+            }
+
             $fleetMissionService->createNewFromPlanet(
                 $source,
                 $targetCoords,
@@ -580,11 +670,70 @@ class BotService
                 $fleet,
                 new Resources(0, 0, 0, 0),
                 100,
-                0
+                $holdingHours
             );
 
             $this->logAction(BotActionType::FLEET, "Fleet save to {$targetCoords->asString()}", [
                 'consumption' => $consumption,
+                'holding_hours' => $holdingHours,
+            ]);
+
+            return true;
+        } catch (Exception) {
+            return false;
+        }
+    }
+
+    public function tryJumpGateEvacuation(): bool
+    {
+        try {
+            $moons = $this->player->planets->allMoons();
+            if (count($moons) < 2) {
+                return false;
+            }
+
+            $jumpGateService = app(JumpGateService::class);
+            $eligibleSources = [];
+            foreach ($moons as $moon) {
+                if ($moon->getObjectLevel('jump_gate') < 1) {
+                    continue;
+                }
+                if ($jumpGateService->isOnCooldown($moon)) {
+                    continue;
+                }
+                $eligibleSources[] = $moon;
+            }
+
+            if (count($eligibleSources) < 2) {
+                return false;
+            }
+
+            $source = $eligibleSources[array_rand($eligibleSources)];
+            $targets = array_values(array_filter($eligibleSources, fn ($m) => $m->getPlanetId() !== $source->getPlanetId()));
+            if (empty($targets)) {
+                return false;
+            }
+            $target = $targets[array_rand($targets)];
+
+            $ships = [];
+            foreach ($jumpGateService->getTransferableShips() as $shipName) {
+                $available = $source->getObjectAmount($shipName);
+                if ($available > 0) {
+                    $ships[$shipName] = (int) floor($available * 0.7);
+                }
+            }
+
+            if (empty($ships)) {
+                return false;
+            }
+
+            if (!$jumpGateService->transferShips($source, $target, $ships)) {
+                return false;
+            }
+            $jumpGateService->setCooldown($source, $target);
+
+            $this->logAction(BotActionType::FLEET, "JumpGate transfer to {$target->getPlanetName()}", [
+                'ships' => $ships,
             ]);
 
             return true;
@@ -954,7 +1103,7 @@ class BotService
             'crystal_mine' => 135,
             'deuterium_synthesizer' => 130,
             'solar_plant' => 125,
-            'fusion_reactor' => 120,
+            'fusion_plant' => 120,
 
             // TIER 2: Storage and facilities (essential for growth)
             'metal_store' => 110,
@@ -1178,9 +1327,9 @@ class BotService
             $fleetSettings = $this->bot->getFleetSettings();
 
             // Get buildable units with smart selection
-            $units = $this->isUnderThreat()
-                ? ObjectService::getDefenseObjects()
-                : ObjectService::getUnitObjects();
+            $preferDefense = $this->isUnderThreat()
+                || ($this->getPersonality() === BotPersonality::DEFENSIVE && mt_rand(1, 100) <= 35);
+            $units = $preferDefense ? ObjectService::getDefenseObjects() : ObjectService::getUnitObjects();
             $affordableUnits = [];
 
             foreach ($units as $unit) {
@@ -1554,7 +1703,110 @@ class BotService
             return $total >= ($minForAction * 2) && $lowUsage < 0.7;
         }
 
-        return $richUsage >= $maxStorageBeforeSpending && $lowUsage < 0.6;
+        $shouldTrade = $richUsage >= $maxStorageBeforeSpending && $lowUsage < 0.6;
+
+        // Personality influence
+        if ($this->getPersonality() === BotPersonality::ECONOMIC) {
+            $shouldTrade = $shouldTrade || ($richUsage >= 0.7 && $lowUsage < 0.7);
+        } elseif ($this->getPersonality() === BotPersonality::DEFENSIVE) {
+            $shouldTrade = $shouldTrade && $richUsage >= 0.85;
+        }
+
+        return $shouldTrade;
+    }
+
+    private function shouldUseMerchantTrade(): bool
+    {
+        if ($this->isUnderThreat()) {
+            return false;
+        }
+
+        if ($this->shouldSkipAction('trade')) {
+            return false;
+        }
+
+        $user = $this->player->getUser();
+        if ($user->dark_matter < MerchantService::DARK_MATTER_COST) {
+            return false;
+        }
+
+        $state = (new GameStateAnalyzer())->analyzeCurrentState($this);
+        $imbalance = (float) ($state['resource_imbalance'] ?? 0.0);
+
+        if ($imbalance < 0.35 && !$this->isStoragePressureHigh()) {
+            return false;
+        }
+
+        if ($this->getPersonality() === BotPersonality::DEFENSIVE && !$this->isStoragePressureHigh()) {
+            return false;
+        }
+
+        return true;
+    }
+
+    private function tryMerchantTrade(): bool
+    {
+        try {
+            $planet = $this->getRichestPlanet();
+            if ($planet === null) {
+                return false;
+            }
+
+            $resources = $planet->getResources();
+            $resourceAmounts = [
+                'metal' => $resources->metal->get(),
+                'crystal' => $resources->crystal->get(),
+                'deuterium' => $resources->deuterium->get(),
+            ];
+
+            arsort($resourceAmounts);
+            $giveResource = array_key_first($resourceAmounts);
+
+            $lowest = $resourceAmounts;
+            asort($lowest);
+            $receiveResource = array_key_first($lowest);
+
+            if ($giveResource === $receiveResource) {
+                return false;
+            }
+
+            $call = MerchantService::callMerchant($this->player, $giveResource);
+            if (empty($call['success'])) {
+                return false;
+            }
+
+            $rates = $call['tradeRates']['receive'] ?? [];
+            if (empty($rates[$receiveResource]['rate'])) {
+                return false;
+            }
+
+            $giveAvailable = (int) $resourceAmounts[$giveResource];
+            $giveAmount = (int) min(max(5000, $giveAvailable * 0.2), $giveAvailable);
+            if ($giveAmount <= 0) {
+                return false;
+            }
+
+            $result = MerchantService::executeTrade(
+                $planet,
+                $giveResource,
+                $receiveResource,
+                $giveAmount,
+                (float) $rates[$receiveResource]['rate']
+            );
+
+            if (!empty($result['success'])) {
+                $this->logAction(BotActionType::TRADE, "Merchant trade {$giveResource}→{$receiveResource}", [
+                    'give' => $giveAmount,
+                    'receive' => $result['received'] ?? null,
+                ]);
+                $this->bot->updateLastAction();
+                return true;
+            }
+        } catch (Exception) {
+            return false;
+        }
+
+        return false;
     }
 
     private function getFleetSlotUsage(): float
@@ -1607,6 +1859,10 @@ class BotService
     public function sendResourceTransport(): bool
     {
         try {
+            if ($this->shouldUseMerchantTrade() && $this->tryMerchantTrade()) {
+                return true;
+            }
+
             if (!$this->hasFleetSlotsAvailable()) {
                 $this->logAction(BotActionType::TRADE, 'No fleet slots available for transport', [], 'failed');
                 return false;
@@ -1624,6 +1880,9 @@ class BotService
             $availableLarge = $source->getObjectAmount('large_cargo');
             $availableSmall = $source->getObjectAmount('small_cargo');
             if ($availableLarge + $availableSmall <= 0) {
+                if ($this->shouldUseMerchantTrade() && $this->tryMerchantTrade()) {
+                    return true;
+                }
                 $this->logAction(BotActionType::TRADE, 'No cargo ships available', [], 'failed');
                 return false;
             }
@@ -1908,6 +2167,67 @@ class BotService
         return max(10, min(200, $base));
     }
 
+    private function estimateAttackLossRatio(int $attackPower, int $defensePower): float
+    {
+        $ratio = $attackPower / max(1, $defensePower);
+
+        return match (true) {
+            $ratio >= 2.0 => 0.10,
+            $ratio >= 1.4 => 0.25,
+            $ratio >= 1.1 => 0.40,
+            $ratio >= 0.9 => 0.65,
+            default => 0.85,
+        };
+    }
+
+    private function shouldAbortAttackByPhalanx(PlanetService $source, PlanetService $target, \OGame\GameObjects\Models\Units\UnitCollection $fleet, float $speedPercent): bool
+    {
+        try {
+            $moons = $this->player->planets->allMoons();
+            if (empty($moons)) {
+                return false;
+            }
+
+            $phalanxService = app(PhalanxService::class);
+            $fleetMissionService = app(FleetMissionService::class);
+            $targetCoords = $target->getPlanetCoordinates();
+            $arrival = now()->timestamp + $fleetMissionService->calculateFleetMissionDuration($source, $targetCoords, $fleet, null, $speedPercent);
+
+            foreach ($moons as $moon) {
+                $level = $moon->getObjectLevel('sensor_phalanx');
+                if ($level < 1) {
+                    continue;
+                }
+
+                if (!$phalanxService->canScanTarget($moon->getPlanetCoordinates()->galaxy, $moon->getPlanetCoordinates()->system, $level, $targetCoords, $this->player->getId())) {
+                    continue;
+                }
+
+                $deut = $moon->getResources()->deuterium->get();
+                if (!$phalanxService->hasEnoughDeuterium($deut)) {
+                    continue;
+                }
+
+                $moon->planet->deuterium = max(0, (int) $moon->planet->deuterium - $phalanxService->getScanCost());
+                $moon->planet->save();
+
+                $scan = $phalanxService->scanPlanetFleets($target->getPlanetId(), $this->player->getId());
+                foreach ($scan as $fleetInfo) {
+                    if (!empty($fleetInfo['is_incoming']) && ($fleetInfo['time_arrival'] ?? 0) <= ($arrival + 300)) {
+                        $this->logAction(BotActionType::ATTACK, 'Phalanx scan indicates incoming support, aborting attack', [
+                            'target' => $targetCoords->asString(),
+                        ], 'failed');
+                        return true;
+                    }
+                }
+            }
+        } catch (Exception) {
+            return false;
+        }
+
+        return false;
+    }
+
     /**
      * Send an attack fleet with improved target selection.
      */
@@ -1970,9 +2290,13 @@ class BotService
                     $this->bot->updateLastAction();
                     return true;
                 }
+                $this->logAction(BotActionType::ATTACK, 'No recent espionage report available', [], 'failed');
+                return false;
             }
 
-            if ($report = $this->getLatestEspionageReport($target)) {
+            $report = $this->getLatestEspionageReport($target);
+            $reportPower = 0;
+            if ($report) {
                 $this->recordTargetIntel($report, $target);
                 $reportPower = $this->calculateReportDefensePower($report);
                 if ($reportPower > 0 && $reportPower > $this->calculateFleetPower($source) * 1.2) {
@@ -1996,9 +2320,12 @@ class BotService
                 return false;
             }
 
-            $lootEstimate = $target->getResources()->metal->get()
-                + $target->getResources()->crystal->get()
-                + $target->getResources()->deuterium->get();
+            $lootEstimate = 0;
+            if ($report) {
+                $lootEstimate = (int) (($report->resources['metal'] ?? 0)
+                    + ($report->resources['crystal'] ?? 0)
+                    + ($report->resources['deuterium'] ?? 0));
+            }
             $cargoCapacity = $fleet->getTotalCargoCapacity($this->player);
             if ($cargoCapacity <= 0 || $lootEstimate < ($cargoCapacity * 0.2)) {
                 $this->logAction(BotActionType::ATTACK, 'Target loot too low for fleet capacity', [
@@ -2023,15 +2350,6 @@ class BotService
                 return false;
             }
 
-            if ($lootEstimate < ($consumption * 2)) {
-                $this->logAction(BotActionType::ATTACK, 'Attack not profitable after consumption', [
-                    'loot' => $lootEstimate,
-                    'consumption' => $consumption,
-                ], 'failed');
-                $this->addAvoidTargetUserId($target->getPlayer()->getId());
-                return false;
-            }
-
             // Check for defenses on target
             $targetPower = $this->calculateTargetFleetPower($target);
             $attackPower = $this->calculateFleetPower($fleet);
@@ -2046,8 +2364,26 @@ class BotService
                 return false;
             }
 
+            $lossRatio = $this->estimateAttackLossRatio($attackPower, max($targetPower, $reportPower ?? 0));
+            $expectedLossCost = (int) ($attackPower * $lossRatio * 1000);
+            $minProfit = (int) ($consumption + ($expectedLossCost * 0.3));
+            if ($lootEstimate < $minProfit) {
+                $this->logAction(BotActionType::ATTACK, 'Attack not profitable after expected losses', [
+                    'loot' => $lootEstimate,
+                    'consumption' => $consumption,
+                    'expected_loss_cost' => $expectedLossCost,
+                ], 'failed');
+                $this->addAvoidTargetUserId($target->getPlayer()->getId());
+                return false;
+            }
+
+            if ($this->shouldAbortAttackByPhalanx($source, $target, $fleet, $speedPercent)) {
+                $this->addAvoidTargetUserId($target->getPlayer()->getId());
+                return false;
+            }
+
             // Send the fleet
-            $fleetMissionService->createNewFromPlanet(
+            $mission = $fleetMissionService->createNewFromPlanet(
                 $source,
                 $targetCoords,
                 \OGame\Models\Enums\PlanetType::Planet,
@@ -2065,6 +2401,7 @@ class BotService
             ]);
 
             $this->setAllianceTargetCoordinates($targetCoords);
+            $this->tryCreateAcsUnion($mission, $target);
 
             // Set cooldown
             $cooldown = config('bots.default_attack_cooldown_hours', 2);
@@ -2087,6 +2424,11 @@ class BotService
         try {
             if (!$this->hasFleetSlotsAvailable()) {
                 $this->logAction(BotActionType::FLEET, 'No fleet slots available for expedition', [], 'failed');
+                return false;
+            }
+
+            if ($this->player->getExpeditionSlotsInUse() >= $this->player->getExpeditionSlotsMax()) {
+                $this->logAction(BotActionType::FLEET, 'No expedition slots available', [], 'failed');
                 return false;
             }
 
@@ -2183,27 +2525,25 @@ class BotService
         }
 
         // Calculate profitability
-        $sourceResources = $source->getResources();
-        $targetResources = $candidate->getResources();
-        $loot = $targetResources->metal->get() + $targetResources->crystal->get() + $targetResources->deuterium->get();
+        $report = $this->getLatestEspionageReport($candidate);
+        if ($report && $report->created_at && $report->created_at->diffInMinutes(now()) < 30) {
+            $loot = (int) (($report->resources['metal'] ?? 0) + ($report->resources['crystal'] ?? 0) + ($report->resources['deuterium'] ?? 0));
+            if ($loot < 10000) {
+                $this->logAction(BotActionType::ATTACK, 'Target not profitable enough', [
+                    'target_loot' => $loot,
+                ], 'failed');
+                return null;
+            }
 
-        if ($loot < 10000) {
-            $this->logAction(BotActionType::ATTACK, 'Target not profitable enough', [
-                'target_loot' => $loot,
-            ], 'failed');
-            return null;
-        }
-
-        // Check fleet strength comparison
-        $targetPower = $this->calculateTargetFleetPower($candidate);
-        $sourcePower = $this->calculateFleetPower($source);
-
-        if ($targetPower > $sourcePower * 2) {
-            $this->logAction(BotActionType::ATTACK, 'Target too strong', [
-                'target_power' => $targetPower,
-                'source_power' => $sourcePower,
-            ], 'failed');
-            return null;
+            $targetPower = $this->calculateReportDefensePower($report);
+            $sourcePower = $this->calculateFleetPower($source);
+            if ($targetPower > 0 && $targetPower > $sourcePower * 2) {
+                $this->logAction(BotActionType::ATTACK, 'Target too strong (espionage)', [
+                    'target_power' => $targetPower,
+                    'source_power' => $sourcePower,
+                ], 'failed');
+                return null;
+            }
         }
 
         return $candidate;
@@ -2512,6 +2852,70 @@ class BotService
         }
         $key = 'alliance_target_' . $user->alliance_id;
         cache()->put($key, ['g' => $coords->galaxy, 's' => $coords->system, 'p' => $coords->position], now()->addMinutes(30));
+    }
+
+    private function tryCreateAcsUnion(FleetMission $mission, PlanetService $target): void
+    {
+        try {
+            $user = $this->player->getUser();
+            if (!$user->alliance_id || !config('bots.allow_alliances', true)) {
+                return;
+            }
+
+            if (mt_rand(1, 100) > 20) {
+                return;
+            }
+
+            $fleetUnionService = app(FleetUnionService::class);
+            $union = $fleetUnionService->createUnion($mission, 'Bot ACS');
+
+            $allyBots = Bot::where('is_active', true)
+                ->where('id', '!=', $this->bot->id)
+                ->whereHas('user', function ($q) use ($user) {
+                    $q->where('alliance_id', $user->alliance_id);
+                })
+                ->limit(3)
+                ->get();
+
+            foreach ($allyBots as $allyBot) {
+                $allyService = app(\OGame\Factories\BotServiceFactory::class)->makeFromBotModel($allyBot);
+                if (!$allyService->hasFleetSlotsAvailable() || $allyService->isUnderThreat()) {
+                    continue;
+                }
+
+                $source = $allyService->getRichestPlanet();
+                if ($source === null) {
+                    continue;
+                }
+
+                $fleetBuilder = app(BotFleetBuilderService::class);
+                $allyFleet = $fleetBuilder->buildAttackFleet($allyService, $target);
+                if ($allyFleet->getAmount() === 0) {
+                    continue;
+                }
+
+                $fleetMissionService = app(FleetMissionService::class);
+                $speedPercent = 80;
+                $allyMission = $fleetMissionService->createNewFromPlanet(
+                    $source,
+                    $target->getPlanetCoordinates(),
+                    \OGame\Models\Enums\PlanetType::Planet,
+                    1,
+                    $allyFleet,
+                    new Resources(0, 0, 0, 0),
+                    $speedPercent,
+                    0
+                );
+
+                $fleetUnionService->joinUnion($union, $allyMission);
+                $allyService->logAction(BotActionType::ATTACK, 'Joined ACS attack', [
+                    'union_id' => $union->id,
+                ]);
+                break;
+            }
+        } catch (Exception) {
+            // Ignore ACS errors
+        }
     }
 
     private function pickAttackSpeedPercent(PlanetService $target): float

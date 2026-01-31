@@ -91,7 +91,7 @@ class BotFleetBuilderService
     /**
      * Build an expedition fleet for the bot.
      */
-    public function buildExpeditionFleet(BotService $bot): UnitCollection
+    public function buildExpeditionFleet(BotService $bot, float $fleetPercentage = 0.3): UnitCollection
     {
         $planet = $bot->getRichestPlanet();
         if ($planet === null) {
@@ -108,7 +108,8 @@ class BotFleetBuilderService
 
         // Expedition fleet composition
         // Smaller, balanced fleets for expeditions
-        $maxPoints = 5000; // Max fleet points for expedition
+        $fleetPercentage = max(0.05, min(0.5, $fleetPercentage));
+        $maxPoints = (int) max(1500, 5000 * $fleetPercentage); // Scale expedition size
 
         // Calculate fleet composition
         $composition = $this->calculateExpeditionComposition($personality, $maxPoints);

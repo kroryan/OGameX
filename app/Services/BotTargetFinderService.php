@@ -33,24 +33,31 @@ class BotTargetFinderService
             $botUserIds = array_values(array_unique(array_merge($botUserIds, $avoidUserIds)));
         }
         $selfId = $bot->getPlayer()->getId();
+        $avoidStronger = (bool) (($bot->getBot()->behavior_flags['avoid_stronger_players'] ?? false));
+        $botScore = $this->getBotScore($bot);
 
         return match ($targetType) {
-            BotTargetType::RANDOM => $this->findRandomTarget($botUserIds, $selfId),
-            BotTargetType::WEAK => $this->findWeakTarget($bot, $botUserIds),
-            BotTargetType::RICH => $this->findRichTarget($bot, $botUserIds),
-            BotTargetType::SIMILAR => $this->findSimilarTarget($bot, $botUserIds),
+            BotTargetType::RANDOM => $this->findRandomTarget($botUserIds, $selfId, $avoidStronger ? $botScore : null),
+            BotTargetType::WEAK => $this->findWeakTarget($bot, $botUserIds, $avoidStronger ? $botScore : null),
+            BotTargetType::RICH => $this->findRichTarget($bot, $botUserIds, $avoidStronger ? $botScore : null),
+            BotTargetType::SIMILAR => $this->findSimilarTarget($bot, $botUserIds, $avoidStronger ? $botScore : null),
         };
     }
 
     /**
      * Find a random target planet.
      */
-    private function findRandomTarget(array $excludeUserIds = [], int $selfUserId = 0): ?PlanetService
+    private function findRandomTarget(array $excludeUserIds = [], int $selfUserId = 0, int|null $maxScore = null): ?PlanetService
     {
         $inactiveThreshold = now()->subMinutes(45)->timestamp;
         $query = Planet::query()
-            ->whereHas('user', function ($q) {
+            ->whereHas('user', function ($q) use ($maxScore) {
                 $q->where('vacation_mode', false);
+                if ($maxScore !== null && $maxScore > 0) {
+                    $q->whereHas('highscore', function ($hq) use ($maxScore) {
+                        $hq->where('general', '<=', $maxScore * 1.2);
+                    });
+                }
             })
             ->join('users', 'planets.user_id', '=', 'users.id')
             ->select('planets.*')
@@ -74,17 +81,22 @@ class BotTargetFinderService
     /**
      * Find a weak target (lower score).
      */
-    private function findWeakTarget(BotService $bot, array $excludeUserIds = []): ?PlanetService
+    private function findWeakTarget(BotService $bot, array $excludeUserIds = [], int|null $maxScore = null): ?PlanetService
     {
         $botScore = $this->getBotScore($bot);
         $inactiveThreshold = now()->subMinutes(45)->timestamp;
 
         $planets = Planet::query()
-            ->whereHas('user', function ($q) use ($botScore) {
+            ->whereHas('user', function ($q) use ($botScore, $maxScore) {
                 $q->where('vacation_mode', false)
                   ->whereHas('highscore', function ($hq) use ($botScore) {
                       $hq->where('general', '<', $botScore * 0.8); // 20% weaker
                   });
+                if ($maxScore !== null && $maxScore > 0) {
+                    $q->whereHas('highscore', function ($hq) use ($maxScore) {
+                        $hq->where('general', '<=', $maxScore * 1.2);
+                    });
+                }
             })
             ->join('users', 'planets.user_id', '=', 'users.id')
             ->select('planets.*')
@@ -106,13 +118,18 @@ class BotTargetFinderService
     /**
      * Find a rich target (more resources).
      */
-    private function findRichTarget(BotService $bot, array $excludeUserIds = []): ?PlanetService
+    private function findRichTarget(BotService $bot, array $excludeUserIds = [], int|null $maxScore = null): ?PlanetService
     {
         // Find planets with high resource production
         $inactiveThreshold = now()->subMinutes(45)->timestamp;
         $planets = Planet::query()
-            ->whereHas('user', function ($q) {
+            ->whereHas('user', function ($q) use ($maxScore) {
                 $q->where('vacation_mode', false);
+                if ($maxScore !== null && $maxScore > 0) {
+                    $q->whereHas('highscore', function ($hq) use ($maxScore) {
+                        $hq->where('general', '<=', $maxScore * 1.2);
+                    });
+                }
             })
             ->join('users', 'planets.user_id', '=', 'users.id')
             ->select('planets.*')
@@ -135,19 +152,24 @@ class BotTargetFinderService
     /**
      * Find a target with similar strength.
      */
-    private function findSimilarTarget(BotService $bot, array $excludeUserIds = []): ?PlanetService
+    private function findSimilarTarget(BotService $bot, array $excludeUserIds = [], int|null $maxScore = null): ?PlanetService
     {
         $botScore = $this->getBotScore($bot);
         $inactiveThreshold = now()->subMinutes(45)->timestamp;
 
         $planets = Planet::query()
-            ->whereHas('user', function ($q) use ($botScore) {
+            ->whereHas('user', function ($q) use ($botScore, $maxScore) {
                 $q->where('vacation_mode', false)
                   ->whereHas('highscore', function ($hq) use ($botScore) {
                       // Within 20% of bot score
                       $hq->where('general', '>=', $botScore * 0.8)
                          ->where('general', '<=', $botScore * 1.2);
                   });
+                if ($maxScore !== null && $maxScore > 0) {
+                    $q->whereHas('highscore', function ($hq) use ($maxScore) {
+                        $hq->where('general', '<=', $maxScore * 1.2);
+                    });
+                }
             })
             ->join('users', 'planets.user_id', '=', 'users.id')
             ->select('planets.*')

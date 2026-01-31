@@ -106,8 +106,25 @@ class Bot extends Model
             return true;
         }
 
-        // Default: always active unless schedule is explicitly configured.
-        return true;
+        // Default: simulate human activity window if no schedule is configured.
+        $cycleMinutes = (int) config('bots.default_activity_cycle_minutes', 240);
+        $windowMinutes = (int) config('bots.default_activity_window_minutes', 20);
+
+        if ($cycleMinutes <= 0 || $windowMinutes <= 0 || $windowMinutes >= $cycleMinutes) {
+            return true;
+        }
+
+        $offsetKey = 'bot_activity_offset_' . $this->id;
+        $offset = cache()->get($offsetKey);
+        if (!is_int($offset)) {
+            $offset = random_int(0, $cycleMinutes - 1);
+            cache()->put($offsetKey, $offset, now()->addHours(24));
+        }
+
+        $minutes = (int) floor(now()->timestamp / 60);
+        $position = ($minutes + $offset) % $cycleMinutes;
+
+        return $position < $windowMinutes;
     }
 
     /**

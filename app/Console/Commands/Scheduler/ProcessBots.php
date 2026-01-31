@@ -115,7 +115,9 @@ class ProcessBots extends Command
             return;
         }
 
-        if ($bot->shouldFleetSaveBySchedule() && $bot->performFleetSave()) {
+        $bot->ensureCharacterClass();
+
+        if ($bot->shouldFleetSaveBySchedule() && $bot->performFleetSave(true)) {
             $this->line('  - Scheduled fleet save executed');
             $bot->getBot()->updateLastAction();
             return;
@@ -137,6 +139,10 @@ class ProcessBots extends Command
         }
 
         if ($bot->isUnderThreat()) {
+            $bot->recallRiskyMissions();
+            if ($bot->tryJumpGateEvacuation()) {
+                $this->line('  - Defensive action: jump gate evacuation');
+            }
             if ($bot->performFleetSave()) {
                 $this->line('  - Defensive action: fleet save initiated');
                 $bot->getBot()->updateLastAction();

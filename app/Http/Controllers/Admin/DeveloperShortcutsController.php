@@ -6,6 +6,7 @@ use Exception;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\View\View;
+use Illuminate\Support\Facades\Schema;
 use OGame\Facades\AppUtil;
 use OGame\Factories\PlanetServiceFactory;
 use OGame\GameConstants\UniverseConstants;
@@ -240,11 +241,12 @@ class DeveloperShortcutsController extends OGameController
                 $planet->save();
             }
 
-            $unitQueue = UnitQueue::where('planet_id', $planet->getPlanetId())
-                ->where('processed', 0)
-                ->where('canceled', 0)
-                ->orderBy('id')
-                ->get();
+            $unitQueueQuery = UnitQueue::where('planet_id', $planet->getPlanetId())
+                ->where('processed', 0);
+            if (Schema::hasColumn('unit_queues', 'canceled')) {
+                $unitQueueQuery->where('canceled', 0);
+            }
+            $unitQueue = $unitQueueQuery->orderBy('id')->get();
             foreach ($unitQueue as $item) {
                 $remaining = max(0, $item->object_amount - $item->object_amount_progress);
                 if ($remaining > 0) {
@@ -280,10 +282,12 @@ class DeveloperShortcutsController extends OGameController
                 ->where('processed', 0)
                 ->where('canceled', 0)
                 ->delete();
-            UnitQueue::where('planet_id', $planet->getPlanetId())
-                ->where('processed', 0)
-                ->where('canceled', 0)
-                ->delete();
+            $unitQueueDelete = UnitQueue::where('planet_id', $planet->getPlanetId())
+                ->where('processed', 0);
+            if (Schema::hasColumn('unit_queues', 'canceled')) {
+                $unitQueueDelete->where('canceled', 0);
+            }
+            $unitQueueDelete->delete();
 
             $planetIds = $playerService->planets->allIds();
             ResearchQueue::whereIn('planet_id', $planetIds)

@@ -201,7 +201,6 @@ If the relocation is successful, you will be charged 240.000 Dark Matter. The pl
                                     <button type="submit" class="btn_blue" style="padding: 4px 8px;">Enable Bot Mode</button>
                                 @endif
                             </form>
-                            <a href="{{ route('bot.logs') }}" class="btn_blue" style="padding: 4px 8px; margin-left: 6px; text-decoration: none;">Bot Logs</a>
                         </div>
                     </div>
                 </div>
@@ -223,11 +222,11 @@ If the relocation is successful, you will be charged 240.000 Dark Matter. The pl
         <div class="c-left"></div>
         <div class="c-right"></div>
 
-        <div class="content-box-s" style="margin: 10px 0;">
+        <div class="content-box-s" style="margin: 15px 0; width: 100%; max-width: 900px; clear: both;">
             <div class="header">
                 <h3>Bot Mode</h3>
             </div>
-            <div class="content">
+            <div class="content" style="padding: 10px 15px;">
                 <form action="{{ route('options.save') }}" method="post">
                     {{ csrf_field() }}
                     <input type="hidden" name="bot_mode_present" value="1">

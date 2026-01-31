@@ -1538,6 +1538,13 @@ class BotService
         $economy = $this->bot->getEconomySettings();
         $maxStorageBeforeSpending = (float) ($economy['max_storage_before_spending'] ?? 0.9);
 
+        if ($colonyPlanet !== null && $lowest->getPlanetId() === $colonyPlanet->getPlanetId()) {
+            $resources = $richest->getResources();
+            $total = $resources->metal->get() + $resources->crystal->get() + $resources->deuterium->get();
+            $minForAction = (int) ($economy['min_resources_for_actions'] ?? 500);
+            return $total >= ($minForAction * 2) && $lowUsage < 0.7;
+        }
+
         return $richUsage >= $maxStorageBeforeSpending && $lowUsage < 0.6;
     }
 

@@ -254,11 +254,11 @@ Sobrescribe las probabilidades por defecto de la personalidad.
 
 ### Estrategia Adaptativa y ROI
 
-El sistema de bots ajusta su estrategia automáticamente usando métricas ligeras:
+El sistema de bots ajusta su estrategia automáticamente usando métricas ligeras y ventanas cortas:
 
 - **ROI aproximado** por acción (build/research/fleet/attack/trade) para priorizar mejoras con retorno rápido.
 - **Riesgo** (amenazas activas, falta de slots de flota, recursos bajos) para evitar decisiones suicidas.
-- **Métricas de crecimiento** (puntos/hora) y **eficiencia** (puntos vs producción) para adaptar probabilidades.
+- **Métricas de crecimiento** (puntos/hora) y **eficiencia** (puntos vs recursos gastados o producción) para adaptar probabilidades.
 
 Cuando el bot detecta estancamiento:
 - Reduce el ahorro para upgrades y gasta más agresivamente.

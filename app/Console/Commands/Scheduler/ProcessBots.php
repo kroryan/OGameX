@@ -52,6 +52,10 @@ class ProcessBots extends Command
             $offset = 0;
         }
 
+        if ($batchSize >= $totalActive) {
+            $offset = 0;
+        }
+
         $batch = $allActiveQuery->skip($offset)->take($batchSize)->get();
         if ($batch->isEmpty()) {
             $offset = 0;
@@ -71,7 +75,7 @@ class ProcessBots extends Command
             return 0;
         }
 
-        $this->info("Processing " . count($bots) . " active bot(s)...");
+        $this->info("Processing " . count($bots) . " active bot(s) (batch size {$batchSize}, offset {$offset}, total {$totalActive})...");
 
         $successCount = 0;
         $failCount = 0;

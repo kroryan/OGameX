@@ -17,7 +17,7 @@ return [
     'scheduler_interval_minutes' => env('BOTS_SCHEDULER_INTERVAL', 5),
 
     // Number of bots to process per scheduler run (prevents long locks)
-    'scheduler_batch_size' => env('BOTS_SCHEDULER_BATCH_SIZE', 50),
+    'scheduler_batch_size' => env('BOTS_SCHEDULER_BATCH_SIZE', 200),
 
     // Default cooldown (in hours) after a bot attacks before it can attack again
     'default_attack_cooldown_hours' => 2,

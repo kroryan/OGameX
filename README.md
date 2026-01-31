@@ -134,9 +134,17 @@ OGameX includes a comprehensive playerbots system that allows you to create auto
 - **Admin Panel** (`/admin/bots`):
   - Create, edit, and delete bots
   - View detailed logs of all bot actions
+  - View combined logs for all bots
+  - Bulk-create bot accounts with a default password
   - Force specific actions (build, fleet, research, attack)
   - View global statistics and activity charts
   - Toggle bots on/off
+  - Assign bot mode to a player account
+
+- **Player Bot Mode**:
+  - Any user account can be toggled to act as a bot
+  - Users can select personality and review their own bot logs
+  - Useful for testing and passive play
 
 - **Scheduler Command**: Process all active bots periodically
   ```bash

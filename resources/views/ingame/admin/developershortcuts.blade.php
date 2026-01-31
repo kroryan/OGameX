@@ -21,6 +21,69 @@
             </div>
             <div class="content">
                 <div class="buddylistContent">
+                    <form action="{{ route('admin.developershortcuts.index') }}" method="get">
+                        <p class="box_highlight textCenter no_buddies">@lang('Locate players/bots and their planets')</p>
+                        <div class="group bborder" style="display: block;">
+                            <div class="fieldwrapper">
+                                <label class="styled textBeefy">@lang('Username contains:')</label>
+                                <div class="thefield">
+                                    <input type="text" class="textInput w100 textCenter textBeefy"
+                                           placeholder="e.g., Bot, Admin" name="locate_username"
+                                           value="{{ $locateQuery ?? '' }}">
+                                </div>
+                            </div>
+                            <div class="fieldwrapper">
+                                <label class="styled textBeefy">@lang('Filter:')</label>
+                                <div class="thefield" style="display: flex; gap: 10px; align-items: center;">
+                                    <select name="locate_type" class="textInput textCenter textBeefy">
+                                        <option value="all" {{ ($locateType ?? 'all') === 'all' ? 'selected' : '' }}>@lang('All')</option>
+                                        <option value="players" {{ ($locateType ?? 'all') === 'players' ? 'selected' : '' }}>@lang('Players')</option>
+                                        <option value="bots" {{ ($locateType ?? 'all') === 'bots' ? 'selected' : '' }}>@lang('Bots')</option>
+                                    </select>
+                                    <label class="styled textBeefy">@lang('Limit:')</label>
+                                    <input type="text" pattern="^[0-9]+$" class="textInput w50 textCenter textBeefy"
+                                           name="locate_limit" value="{{ $locateLimit ?? 200 }}">
+                                </div>
+                            </div>
+                            <div class="fieldwrapper" style="text-align: center;">
+                                <input type="submit" class="btn_blue" name="locate_submit" value="@lang('Locate')">
+                            </div>
+                        </div>
+                    </form>
+
+                    @if(!is_null($locateResults))
+                        <div class="group bborder" style="display: block; margin-top: 10px;">
+                            @if($locateResults->isEmpty())
+                                <div class="fieldwrapper textCenter">@lang('No planets found for this filter.')</div>
+                            @else
+                                <table class="table" style="width: 100%;">
+                                    <thead>
+                                        <tr>
+                                            <th>@lang('Owner')</th>
+                                            <th>@lang('Type')</th>
+                                            <th>@lang('Planet')</th>
+                                            <th>@lang('Coords')</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        @foreach ($locateResults as $row)
+                                            @php
+                                                $typeLabel = $row->planet_type === 1 ? 'Planet' : ($row->planet_type === 2 ? 'Moon' : 'Unknown');
+                                                $ownerLabel = $row->bot_name ? "{$row->bot_name} (bot)" : $row->username;
+                                            @endphp
+                                            <tr>
+                                                <td>{{ $ownerLabel }}</td>
+                                                <td>{{ $typeLabel }}</td>
+                                                <td>{{ $row->planet_name }}</td>
+                                                <td>[{{ $row->galaxy }}:{{ $row->system }}:{{ $row->planet }}]</td>
+                                            </tr>
+                                        @endforeach
+                                    </tbody>
+                                </table>
+                            @endif
+                        </div>
+                    @endif
+
                     <form action="{{ route('admin.developershortcuts.update') }}" name="form" method="post">
                         {{ csrf_field() }}
                                 <p class="box_highlight textCenter no_buddies">@lang('Update current planet:')</p>

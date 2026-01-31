@@ -11,6 +11,7 @@ use OGame\Factories\PlanetServiceFactory;
 use OGame\GameConstants\UniverseConstants;
 use OGame\Http\Controllers\OGameController;
 use OGame\Models\BuildingQueue;
+use OGame\Models\Planet;
 use OGame\Models\Planet\Coordinate;
 use OGame\Models\ResearchQueue;
 use OGame\Models\Resources;
@@ -28,10 +29,50 @@ class DeveloperShortcutsController extends OGameController
      *
      * @return View
      */
-    public function index(PlayerService $playerService, SettingsService $settingsService): View
+    public function index(Request $request, PlayerService $playerService, SettingsService $settingsService): View
     {
         // Get all unit objects
         $units = ObjectService::getUnitObjects();
+        $locateResults = null;
+        $locateQuery = trim((string)$request->input('locate_username', ''));
+        $locateType = (string)$request->input('locate_type', 'all');
+        $locateLimit = (int)$request->input('locate_limit', 200);
+        $locateLimit = max(1, min(2000, $locateLimit));
+
+        if ($request->has('locate_submit')) {
+            $planetsQuery = Planet::query()
+                ->join('users', 'users.id', '=', 'planets.user_id')
+                ->leftJoin('bots', 'bots.user_id', '=', 'users.id')
+                ->where('planets.destroyed', 0);
+
+            if ($locateType === 'bots') {
+                $planetsQuery->whereNotNull('bots.id');
+            } elseif ($locateType === 'players') {
+                $planetsQuery->whereNull('bots.id');
+            }
+
+            if ($locateQuery !== '') {
+                $planetsQuery->where('users.username', 'like', '%' . $locateQuery . '%');
+            }
+
+            $locateResults = $planetsQuery
+                ->select([
+                    'planets.id',
+                    'planets.name as planet_name',
+                    'planets.galaxy',
+                    'planets.system',
+                    'planets.planet',
+                    'planets.planet_type',
+                    'users.username as username',
+                    'bots.name as bot_name',
+                ])
+                ->orderBy('users.username')
+                ->orderBy('planets.galaxy')
+                ->orderBy('planets.system')
+                ->orderBy('planets.planet')
+                ->limit($locateLimit)
+                ->get();
+        }
 
         return view('ingame.admin.developershortcuts')->with([
             'units' => $units,
@@ -39,6 +80,10 @@ class DeveloperShortcutsController extends OGameController
             'research' => ObjectService::getResearchObjects(),
             'currentPlanet' => $playerService->planets->current(),
             'settings' => $settingsService,
+            'locateResults' => $locateResults,
+            'locateQuery' => $locateQuery,
+            'locateType' => $locateType,
+            'locateLimit' => $locateLimit,
         ]);
     }
 

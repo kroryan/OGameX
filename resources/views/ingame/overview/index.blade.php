@@ -186,22 +186,7 @@ If the relocation is successful, you will be charged 240.000 Dark Matter. The pl
                             <span class="planetMoveIcons settings planetMoveGiveUp icon"></span>
                         </a>
 
-                        <div class="float_right" style="margin-right: 10px;">
-                            <form action="{{ route('options.save') }}" method="post" style="display: inline;">
-                                {{ csrf_field() }}
-                                <input type="hidden" name="bot_mode_present" value="1">
-                                <input type="hidden" name="bot_personality" value="{{ $bot ? $bot->personality : 'balanced' }}">
-                                <input type="hidden" name="bot_target_type" value="{{ $bot ? $bot->priority_target_type : 'random' }}">
-                                <input type="hidden" name="bot_max_fleets_sent" value="{{ $bot ? $bot->max_fleets_sent : 3 }}">
-                                @if ($bot && $bot->is_active)
-                                    <input type="hidden" name="bot_mode_enabled" value="0">
-                                    <button type="submit" class="btn_blue" style="padding: 4px 8px;">Disable Bot Mode</button>
-                                @else
-                                    <input type="hidden" name="bot_mode_enabled" value="1">
-                                    <button type="submit" class="btn_blue" style="padding: 4px 8px;">Enable Bot Mode</button>
-                                @endif
-                            </form>
-                        </div>
+                        <div class="float_right" style="margin-right: 10px;"></div>
                     </div>
                 </div>
             </div>
@@ -222,11 +207,11 @@ If the relocation is successful, you will be charged 240.000 Dark Matter. The pl
         <div class="c-left"></div>
         <div class="c-right"></div>
 
-        <div class="content-box-s" style="margin: 15px 0; width: 100%; max-width: 900px; clear: both;">
+        <div class="content-box-s" style="margin: 15px 0; width: 100%; max-width: 100%; clear: both;">
             <div class="header">
                 <h3>Bot Mode</h3>
             </div>
-            <div class="content" style="padding: 10px 15px;">
+            <div class="content" style="padding: 14px 18px;">
                 <form action="{{ route('options.save') }}" method="post">
                     {{ csrf_field() }}
                     <input type="hidden" name="bot_mode_present" value="1">

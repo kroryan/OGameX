@@ -208,7 +208,7 @@ class BotService
     /**
      * Check if bot can afford at least one building.
      */
-    public function canAffordAnyBuilding(): bool
+    public function canAffordAnyBuilding(bool $ignoreReserve = false): bool
     {
         $planets = $this->player->planets->all();
         if (empty($planets)) {
@@ -220,7 +220,7 @@ class BotService
                 continue;
             }
 
-            $budget = $this->getSpendableBudget($planet);
+            $budget = $this->getSpendableBudget($planet, $ignoreReserve);
             if ($budget <= 0) {
                 continue;
             }
@@ -250,7 +250,7 @@ class BotService
     /**
      * Check if bot can afford at least one research.
      */
-    public function canAffordAnyResearch(): bool
+    public function canAffordAnyResearch(bool $ignoreReserve = false): bool
     {
         $planets = $this->player->planets->all();
         if (empty($planets)) {
@@ -266,7 +266,7 @@ class BotService
                 continue;
             }
 
-            $budget = $this->getSpendableBudget($planet);
+            $budget = $this->getSpendableBudget($planet, $ignoreReserve);
             if ($budget <= 0) {
                 continue;
             }
@@ -296,7 +296,7 @@ class BotService
     /**
      * Check if bot can afford at least one unit.
      */
-    public function canAffordAnyUnit(): bool
+    public function canAffordAnyUnit(bool $ignoreReserve = false): bool
     {
         $planets = $this->player->planets->all();
         if (empty($planets)) {
@@ -308,7 +308,7 @@ class BotService
                 continue;
             }
 
-            $budget = $this->getSpendableBudget($planet);
+            $budget = $this->getSpendableBudget($planet, $ignoreReserve);
             if ($budget <= 0) {
                 continue;
             }
@@ -334,11 +334,14 @@ class BotService
         return false;
     }
 
-    private function getSpendableBudget(PlanetService $planet): float
+    private function getSpendableBudget(PlanetService $planet, bool $ignoreReserve = false): float
     {
         $economy = $this->bot->getEconomySettings();
         $resources = $planet->getResources();
         $total = $resources->metal->get() + $resources->crystal->get() + $resources->deuterium->get();
+        if ($ignoreReserve) {
+            return $total;
+        }
         $reserve = (float) ($economy['save_for_upgrade_percent'] ?? 0.3);
 
         return $total * max(0, 1 - $reserve);

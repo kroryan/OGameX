@@ -42,6 +42,16 @@ class BotDecisionService
         // Step 3: Get available options
         $availableActions = $this->getAvailableActions($state);
         if (empty($availableActions)) {
+            // Relax reserve to avoid long "no action" streaks in early game
+            if ($this->botService->canAffordAnyBuilding(true)) {
+                $availableActions[] = BotActionType::BUILD;
+            } elseif ($this->botService->canAffordAnyResearch(true)) {
+                $availableActions[] = BotActionType::RESEARCH;
+            } elseif ($this->botService->canAffordAnyUnit(true)) {
+                $availableActions[] = BotActionType::FLEET;
+            }
+        }
+        if (empty($availableActions)) {
             return null;
         }
 

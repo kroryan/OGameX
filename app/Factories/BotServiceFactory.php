@@ -45,7 +45,10 @@ class BotServiceFactory
      */
     public function getActiveBots(): \Illuminate\Database\Eloquent\Collection
     {
-        return Bot::where('is_active', true)->get();
+        return Bot::where('is_active', true)
+            ->orderByRaw('last_action_at is null desc')
+            ->orderBy('last_action_at')
+            ->get();
     }
 
     /**

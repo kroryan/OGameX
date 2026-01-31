@@ -90,6 +90,8 @@ class ProcessBots extends Command
         $action = $decisionService->decideNextAction();
         if ($action === null) {
             $this->line('  - Skipped: no viable actions available');
+            $bot->logAction(BotActionType::BUILD, 'No viable actions available', [], 'failed');
+            $bot->getBot()->updateLastAction();
             return;
         }
 
@@ -103,6 +105,8 @@ class ProcessBots extends Command
             BotActionType::ATTACK => $bot->sendAttackFleet(),
             BotActionType::TRADE => $this->handleTradeAction($bot),
         };
+
+        $botModel->updateLastAction();
 
         if ($success) {
             $this->line("  - Result: Success");

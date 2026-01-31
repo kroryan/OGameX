@@ -18,11 +18,13 @@ class BotDecisionService
 {
     private BotService $botService;
     private GameStateAnalyzer $stateAnalyzer;
+    private BotObjectiveService $objectiveService;
 
     public function __construct(BotService $botService)
     {
         $this->botService = $botService;
         $this->stateAnalyzer = new GameStateAnalyzer();
+        $this->objectiveService = new BotObjectiveService();
     }
 
     /**
@@ -33,8 +35,15 @@ class BotDecisionService
         // Step 1: Analyze current game state
         $state = $this->stateAnalyzer->analyzeCurrentState($this->botService);
 
+        $botId = $this->botService->getBot()->id;
+        $state['has_attack_target'] = cache()->remember(
+            "bot:{$botId}:has_attack_target",
+            now()->addMinutes(5),
+            fn() => $this->botService->findTarget() !== null
+        );
+
         // Step 2: Determine objective based on personality and game phase
-        $objective = $this->stateAnalyzer->determineObjective(
+        $objective = $this->objectiveService->determineObjective(
             $this->botService->getBot(),
             $state
         );
@@ -99,7 +108,7 @@ class BotDecisionService
         }
 
         // Attack is only available if not on cooldown and has fleet
-        if (!$this->botService->shouldSkipAction('attack') && $this->botService->canAttack() && $this->botService->hasFleetSlotsAvailable() && $state['has_significant_fleet']) {
+        if (!$this->botService->shouldSkipAction('attack') && $this->botService->canAttack() && $this->botService->hasFleetSlotsAvailable() && $state['has_significant_fleet'] && !empty($state['has_attack_target'])) {
             $actions[] = BotActionType::ATTACK;
         }
 
@@ -214,6 +223,9 @@ class BotDecisionService
                 if (!empty($state['is_under_threat'])) {
                     $modifier *= 1.4;
                 }
+                if (empty($state['fleet_slots_available'])) {
+                    $modifier *= 0.4;
+                }
                 break;
 
             case 'attack':
@@ -228,6 +240,9 @@ class BotDecisionService
                 if (!empty($state['is_under_threat'])) {
                     $modifier *= 0.6;
                 }
+                if (empty($state['has_attack_target'])) {
+                    $modifier *= 0.4;
+                }
                 break;
 
             case 'research':
@@ -235,10 +250,16 @@ class BotDecisionService
                 if ($state['research_points'] < $state['building_points'] * 0.5) {
                     $modifier = 1.4;
                 }
+                if (!empty($state['is_under_threat'])) {
+                    $modifier *= 0.8;
+                }
                 break;
             case 'trade':
                 // Stronger if storage is near full
                 $modifier = $this->botService->isStoragePressureHigh() ? 1.5 : 1.1;
+                if (($state['resource_imbalance'] ?? 0.0) > 0.4) {
+                    $modifier *= 1.3;
+                }
                 break;
         }
 

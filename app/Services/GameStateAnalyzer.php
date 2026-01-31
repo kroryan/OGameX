@@ -36,6 +36,7 @@ class GameStateAnalyzer
 
         $totalProduction = ['metal' => 0, 'crystal' => 0, 'deuterium' => 0];
         $totalResources = ['metal' => 0, 'crystal' => 0, 'deuterium' => 0];
+        $storageUsageMax = 0.0;
 
         // Queue status tracking
         $planetsWithBuildingQueueSpace = 0;
@@ -48,6 +49,7 @@ class GameStateAnalyzer
             $totalResources['metal'] += $resources->metal->get();
             $totalResources['crystal'] += $resources->crystal->get();
             $totalResources['deuterium'] += $resources->deuterium->get();
+            $storageUsageMax = max($storageUsageMax, $botService->getStorageUsagePercent($planet));
 
             // Production (approximate from mine levels)
             $totalProduction['metal'] += $this->estimateProduction($planet, 'metal_mine');
@@ -91,6 +93,9 @@ class GameStateAnalyzer
         $canAffordBuilding = $botService->canAffordAnyBuilding();
         $canAffordResearch = $botService->canAffordAnyResearch();
         $canAffordUnit = $botService->canAffordAnyUnit();
+        $planetCount = count($planets);
+        $maxPlanets = $player->getMaxPlanetAmount();
+        $resourceImbalance = $this->calculateResourceImbalance($totalResources);
 
         return [
             'total_points' => $totalPoints,
@@ -101,7 +106,8 @@ class GameStateAnalyzer
             'total_resources' => $totalResources,
             'total_resources_sum' => $totalResourceSum,
             'total_production' => $totalProduction,
-            'planet_count' => count($planets),
+            'planet_count' => $planetCount,
+            'max_planets' => $maxPlanets,
             'game_phase' => $this->determineGamePhase($totalPoints),
             'min_resources_for_actions' => $minResources,
             'can_afford_build' => $canAffordBuilding,
@@ -109,6 +115,11 @@ class GameStateAnalyzer
             'can_afford_research' => $canAffordResearch,
             'has_significant_fleet' => $fleetPoints > 50000,
             'is_under_threat' => $botService->isUnderThreat(),
+            'fleet_slots_available' => $botService->hasFleetSlotsAvailable(),
+            'is_storage_pressure_high' => $botService->isStoragePressureHigh(),
+            'storage_usage_max' => $storageUsageMax,
+            'resource_imbalance' => $resourceImbalance,
+            'can_colonize' => $botService->shouldColonize(),
             // Queue status
             'planets_with_building_space' => $planetsWithBuildingQueueSpace,
             'planets_with_research_space' => $planetsWithResearchQueueSpace,
@@ -173,6 +184,21 @@ class GameStateAnalyzer
         }
 
         return BotObjective::ECONOMIC_GROWTH;
+    }
+
+    private function calculateResourceImbalance(array $resources): float
+    {
+        $total = $resources['metal'] + $resources['crystal'] + $resources['deuterium'];
+        if ($total <= 0) {
+            return 0.0;
+        }
+        $avg = $total / 3;
+        $maxDiff = max(
+            abs($resources['metal'] - $avg),
+            abs($resources['crystal'] - $avg),
+            abs($resources['deuterium'] - $avg)
+        );
+        return $maxDiff / $avg;
     }
 
     /**

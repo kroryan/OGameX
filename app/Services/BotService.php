@@ -842,6 +842,11 @@ class BotService
                     continue;
                 }
 
+                $role = $roles[$planet->getPlanetId()] ?? 'colony';
+                $mineSum = $planet->getObjectLevel('metal_mine')
+                    + $planet->getObjectLevel('crystal_mine')
+                    + $planet->getObjectLevel('deuterium_synthesizer');
+
                 foreach ($buildings as $building) {
                     $currentLevel = $planet->getObjectLevel($building->machine_name);
 
@@ -867,8 +872,12 @@ class BotService
                     }
 
                     $priority = $this->getBuildingPriority($building->machine_name, $planet, $currentLevel);
-                    $roleBonus = $this->getRoleBonusForBuilding($roles[$planet->getPlanetId()] ?? 'colony', $building->machine_name);
-                    $score = ($priority + $roleBonus) * 1000 - $cost;
+                    $roleBonus = $this->getRoleBonusForBuilding($role, $building->machine_name);
+                    $colonyBoost = 0;
+                    if ($role === 'colony' && $mineSum < 6) {
+                        $colonyBoost = 30;
+                    }
+                    $score = ($priority + $roleBonus + $colonyBoost) * 1000 - $cost;
 
                     $affordableBuildings[] = [
                         'building' => $building,
@@ -1652,6 +1661,9 @@ class BotService
 
             $economy = $this->bot->getEconomySettings();
             $reserve = (float) ($economy['save_for_upgrade_percent'] ?? 0.3);
+            if ($target === $this->getColonyNeedingResources()) {
+                $reserve = min($reserve, 0.15);
+            }
             $sendableMetal = max(0, (int)($resources->metal->get() * (1 - $reserve)));
             $sendableCrystal = max(0, (int)($resources->crystal->get() * (1 - $reserve)));
             $sendableDeut = max(0, (int)($resources->deuterium->get() * (1 - $reserve) - $consumption));

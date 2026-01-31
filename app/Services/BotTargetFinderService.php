@@ -47,14 +47,18 @@ class BotTargetFinderService
      */
     private function findRandomTarget(array $excludeUserIds = [], int $selfUserId = 0): ?PlanetService
     {
+        $inactiveThreshold = now()->subMinutes(45)->timestamp;
         $query = Planet::query()
             ->whereHas('user', function ($q) {
                 $q->where('vacation_mode', false);
             })
+            ->join('users', 'planets.user_id', '=', 'users.id')
+            ->select('planets.*')
             ->whereNotIn('user_id', $excludeUserIds)
             ->when($selfUserId > 0, function ($q) use ($selfUserId) {
                 $q->where('user_id', '!=', $selfUserId);
             })
+            ->orderByRaw('users.time < ? desc', [$inactiveThreshold])
             ->inRandomOrder()
             ->limit(10);
 
@@ -73,6 +77,7 @@ class BotTargetFinderService
     private function findWeakTarget(BotService $bot, array $excludeUserIds = []): ?PlanetService
     {
         $botScore = $this->getBotScore($bot);
+        $inactiveThreshold = now()->subMinutes(45)->timestamp;
 
         $planets = Planet::query()
             ->whereHas('user', function ($q) use ($botScore) {
@@ -81,8 +86,11 @@ class BotTargetFinderService
                       $hq->where('general', '<', $botScore * 0.8); // 20% weaker
                   });
             })
+            ->join('users', 'planets.user_id', '=', 'users.id')
+            ->select('planets.*')
             ->whereNotIn('user_id', $excludeUserIds)
             ->where('user_id', '!=', $bot->getPlayer()->getId())
+            ->orderByRaw('users.time < ? desc', [$inactiveThreshold])
             ->inRandomOrder()
             ->limit(10)
             ->get();
@@ -101,12 +109,16 @@ class BotTargetFinderService
     private function findRichTarget(BotService $bot, array $excludeUserIds = []): ?PlanetService
     {
         // Find planets with high resource production
+        $inactiveThreshold = now()->subMinutes(45)->timestamp;
         $planets = Planet::query()
             ->whereHas('user', function ($q) {
                 $q->where('vacation_mode', false);
             })
+            ->join('users', 'planets.user_id', '=', 'users.id')
+            ->select('planets.*')
             ->whereNotIn('user_id', $excludeUserIds)
             ->where('user_id', '!=', $bot->getPlayer()->getId())
+            ->orderByRaw('users.time < ? desc', [$inactiveThreshold])
             ->orderByRaw('(metal_production + crystal_production + deuterium_production) DESC')
             ->limit(20)
             ->get();
@@ -126,6 +138,7 @@ class BotTargetFinderService
     private function findSimilarTarget(BotService $bot, array $excludeUserIds = []): ?PlanetService
     {
         $botScore = $this->getBotScore($bot);
+        $inactiveThreshold = now()->subMinutes(45)->timestamp;
 
         $planets = Planet::query()
             ->whereHas('user', function ($q) use ($botScore) {
@@ -136,8 +149,11 @@ class BotTargetFinderService
                          ->where('general', '<=', $botScore * 1.2);
                   });
             })
+            ->join('users', 'planets.user_id', '=', 'users.id')
+            ->select('planets.*')
             ->whereNotIn('user_id', $excludeUserIds)
             ->where('user_id', '!=', $bot->getPlayer()->getId())
+            ->orderByRaw('users.time < ? desc', [$inactiveThreshold])
             ->inRandomOrder()
             ->limit(10)
             ->get();

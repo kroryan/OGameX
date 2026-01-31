@@ -282,6 +282,27 @@ Estos roles influyen en:
 - **Producción de flota/defensa** (planetario).
 - **Transporte interno** (economy → fleet).
 
+### Estrategia a largo plazo (multi‑día)
+
+Los bots eligen una estrategia con duración de 24–48h:
+- **rush**: prioriza flota/ataque.
+- **raid**: prioriza asaltos con loot.
+- **turtle**: prioriza defensa y economía.
+- **tech_rush**: prioriza investigación.
+- **eco_boom**: prioriza minas y almacenamiento.
+
+La estrategia ajusta pesos de acciones y porcentajes de ahorro.
+
+### Fleet saving humano
+
+Fuera de la ventana activa diaria, los bots pueden hacer fleet save
+para simular patrones humanos y reducir pérdidas.
+
+### Reciclaje automático
+
+Si hay escombros cercanos y recicladores disponibles, los bots envían
+misiones de reciclaje antes de construir más flota.
+
 ### Inteligencia de objetivos y guerra
 
 - Memoria de objetivos: evita enemigos demasiado fuertes o poco rentables durante un tiempo.

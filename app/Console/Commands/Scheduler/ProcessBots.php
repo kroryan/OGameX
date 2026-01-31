@@ -115,6 +115,12 @@ class ProcessBots extends Command
             return;
         }
 
+        if ($bot->shouldFleetSaveBySchedule() && $bot->performFleetSave()) {
+            $this->line('  - Scheduled fleet save executed');
+            $bot->getBot()->updateLastAction();
+            return;
+        }
+
         // Check if bot has been recently processed
         $lastAction = $botModel->last_action_at;
         $interval = config('bots.scheduler_interval_minutes', 5);
@@ -203,6 +209,10 @@ class ProcessBots extends Command
      */
     private function handleFleetAction(BotService $bot): bool
     {
+        if ($bot->tryRecycleNearbyDebris()) {
+            return true;
+        }
+
         if ($bot->shouldColonize()) {
             if ($bot->sendColonization()) {
                 return true;

@@ -34,6 +34,9 @@ class AdaptiveStrategyService
 
         $changed = false;
 
+        $longTerm = app(\OGame\Services\BotLongTermStrategyService::class)->getStrategy($botService, $state);
+        $economy = array_merge($economy, $longTerm['economy'] ?? []);
+
         if ($growth < 5 && $efficiency < 0.6) {
             // Stagnation: spend more and build more.
             $economy['save_for_upgrade_percent'] = max(0.1, ($economy['save_for_upgrade_percent'] ?? 0.3) - 0.05);

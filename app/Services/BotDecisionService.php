@@ -20,6 +20,7 @@ class BotDecisionService
     private GameStateAnalyzer $stateAnalyzer;
     private BotObjectiveService $objectiveService;
     private AdaptiveStrategyService $adaptiveStrategy;
+    private BotLongTermStrategyService $longTermStrategy;
 
     public function __construct(BotService $botService)
     {
@@ -27,6 +28,7 @@ class BotDecisionService
         $this->stateAnalyzer = new GameStateAnalyzer();
         $this->objectiveService = new BotObjectiveService();
         $this->adaptiveStrategy = new AdaptiveStrategyService();
+        $this->longTermStrategy = new BotLongTermStrategyService();
     }
 
     /**
@@ -52,6 +54,10 @@ class BotDecisionService
 
         // Adaptive tuning based on live metrics
         $this->adaptiveStrategy->adaptIfNeeded($this->botService, $state);
+
+        $strategy = $this->longTermStrategy->getStrategy($this->botService, $state);
+        $state['long_term_strategy'] = $strategy['strategy'] ?? 'balanced';
+        $state['strategy_weights'] = $strategy['weights'] ?? [];
 
         // Step 2: Determine objective based on personality and game phase
         $objective = $this->objectiveService->determineObjective(
@@ -143,6 +149,11 @@ class BotDecisionService
         $weights = $objective->getActionWeights();
         $baseScore = $weights[$action->value] ?? 10;
         $score += $baseScore;
+
+        $strategyWeights = $state['strategy_weights'] ?? [];
+        if (!empty($strategyWeights[$action->value])) {
+            $score *= (float) $strategyWeights[$action->value];
+        }
 
         // Apply bot-specific action probabilities
         $probWeights = $this->botService->getBot()->getActionProbabilities();

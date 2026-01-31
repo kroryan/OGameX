@@ -443,6 +443,90 @@ class BotService
         return $incoming > 0;
     }
 
+    public function shouldFleetSaveBySchedule(): bool
+    {
+        if ($this->isUnderThreat()) {
+            return false;
+        }
+        if (!$this->hasFleetSlotsAvailable()) {
+            return false;
+        }
+        if ($this->getFleetSlotUsage() < 0.4) {
+            return false;
+        }
+
+        $cacheKey = 'bot_fleet_window_' . $this->bot->id;
+        $window = cache()->get($cacheKey);
+        if (!is_array($window)) {
+            $startHour = rand(0, 23);
+            $duration = rand(6, 10);
+            $window = ['start' => $startHour, 'duration' => $duration];
+            cache()->put($cacheKey, $window, now()->addHours(24));
+        }
+
+        $hour = (int) now()->format('H');
+        $end = ($window['start'] + $window['duration']) % 24;
+        $inWindow = $window['start'] < $end
+            ? ($hour >= $window['start'] && $hour < $end)
+            : ($hour >= $window['start'] || $hour < $end);
+
+        return !$inWindow;
+    }
+
+    public function tryRecycleNearbyDebris(): bool
+    {
+        if (!$this->hasFleetSlotsAvailable()) {
+            return false;
+        }
+
+        $source = $this->getPlanetByRole('fleet') ?? $this->getRichestPlanet();
+        if ($source === null) {
+            return false;
+        }
+
+        $recyclers = $source->getObjectAmount('recycler');
+        if ($recyclers < 1) {
+            return false;
+        }
+
+        $coords = $source->getPlanetCoordinates();
+        $field = \OGame\Models\DebrisField::where('galaxy', $coords->galaxy)
+            ->whereBetween('system', [max(1, $coords->system - 3), $coords->system + 3])
+            ->orderByRaw('(metal + crystal + deuterium) DESC')
+            ->first();
+
+        if (!$field || ($field->metal + $field->crystal + $field->deuterium) < 5000) {
+            return false;
+        }
+
+        $fleet = new \OGame\GameObjects\Models\Units\UnitCollection();
+        $fleet->addUnit(ObjectService::getUnitObjectByMachineName('recycler'), min(20, $recyclers));
+
+        $targetCoords = new \OGame\Models\Planet\Coordinate($field->galaxy, $field->system, $field->planet);
+        $fleetMissionService = app(FleetMissionService::class);
+        $consumption = $fleetMissionService->calculateConsumption($source, $fleet, $targetCoords, 0, 100);
+        if ($source->getResources()->deuterium->get() < $consumption) {
+            return false;
+        }
+
+        $fleetMissionService->createNewFromPlanet(
+            $source,
+            $targetCoords,
+            \OGame\Models\Enums\PlanetType::DebrisField,
+            8,
+            $fleet,
+            new Resources(0, 0, 0, 0),
+            rand(80, 100),
+            0
+        );
+
+        $this->logAction(BotActionType::FLEET, "Sent recyclers to debris {$targetCoords->asString()}", [
+            'recyclers' => $fleet->getAmount(),
+        ]);
+
+        return true;
+    }
+
     public function performFleetSave(): bool
     {
         try {
@@ -594,7 +678,7 @@ class BotService
             7,
             $fleet,
             $resourcesToSend,
-            100,
+            rand(70, 100),
             0
         );
 
@@ -618,14 +702,15 @@ class BotService
         $maxSystems = \OGame\GameConstants\UniverseConstants::MAX_SYSTEM_COUNT;
 
         $attempts = 0;
+        $preferredPositions = [4, 5, 6, 7, 8, 9, 10, 11, 12];
         while ($attempts < 40) {
-            $systemOffset = rand(-50, 50);
+            $systemOffset = rand(-30, 30);
             $system = $coords->system + $systemOffset;
             if ($system < 1 || $system > $maxSystems) {
                 $system = rand(1, $maxSystems);
             }
 
-            $position = rand(4, 12);
+            $position = $preferredPositions[array_rand($preferredPositions)];
             if (!$this->player->canColonizePosition($position)) {
                 $attempts++;
                 continue;
@@ -1855,7 +1940,8 @@ class BotService
             // Calculate consumption
             $fleetMissionService = app(FleetMissionService::class);
             $targetCoords = $target->getPlanetCoordinates();
-            $consumption = $fleetMissionService->calculateConsumption($source, $fleet, $targetCoords, 0, 100);
+            $speedPercent = $this->pickAttackSpeedPercent($target);
+            $consumption = $fleetMissionService->calculateConsumption($source, $fleet, $targetCoords, 0, $speedPercent);
 
             if ($source->getResources()->deuterium->get() < $consumption) {
                 $this->logAction(BotActionType::ATTACK, 'Not enough deuterium for attack', [
@@ -1896,7 +1982,7 @@ class BotService
                 1, // Attack mission
                 $fleet,
                 new Resources(0, 0, 0, 0),
-                100,
+                $speedPercent,
                 0
             );
 
@@ -1956,7 +2042,8 @@ class BotService
 
             // Calculate consumption
             $fleetMissionService = app(FleetMissionService::class);
-            $consumption = $fleetMissionService->calculateConsumption($source, $fleet, $expeditionCoords, 1, 100);
+            $speedPercent = rand(70, 100);
+            $consumption = $fleetMissionService->calculateConsumption($source, $fleet, $expeditionCoords, 1, $speedPercent);
 
             if ($source->getResources()->deuterium->get() < $consumption) {
                 $this->logAction(BotActionType::FLEET, 'Not enough deuterium for expedition', [
@@ -1974,7 +2061,7 @@ class BotService
                 15, // Expedition mission
                 $fleet,
                 new Resources(0, 0, 0, 0),
-                100,
+                $speedPercent,
                 1 // 1 hour holding time
             );
 
@@ -2353,6 +2440,23 @@ class BotService
         }
         $key = 'alliance_target_' . $user->alliance_id;
         cache()->put($key, ['g' => $coords->galaxy, 's' => $coords->system, 'p' => $coords->position], now()->addMinutes(30));
+    }
+
+    private function pickAttackSpeedPercent(PlanetService $target): float
+    {
+        try {
+            $targetUser = $target->getPlayer()->getUser();
+            $lastActive = $targetUser->time ?? null;
+            $inactiveMinutes = $lastActive ? (now()->timestamp - $lastActive) / 60 : 0;
+
+            if ($inactiveMinutes > 60) {
+                return rand(60, 80);
+            }
+        } catch (Exception) {
+            // ignore
+        }
+
+        return rand(80, 100);
     }
 
     /**

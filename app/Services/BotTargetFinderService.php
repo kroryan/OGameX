@@ -35,12 +35,14 @@ class BotTargetFinderService
         $selfId = $bot->getPlayer()->getId();
         $avoidStronger = (bool) (($bot->getBot()->behavior_flags['avoid_stronger_players'] ?? false));
         $botScore = $this->getBotScore($bot);
+        $ratio = (float) config('bots.avoid_stronger_player_ratio', 1.2);
+        $maxScore = $avoidStronger && $botScore > 0 ? (int) ($botScore * $ratio) : null;
 
         return match ($targetType) {
-            BotTargetType::RANDOM => $this->findRandomTarget($botUserIds, $selfId, $avoidStronger ? $botScore : null),
-            BotTargetType::WEAK => $this->findWeakTarget($bot, $botUserIds, $avoidStronger ? $botScore : null),
-            BotTargetType::RICH => $this->findRichTarget($bot, $botUserIds, $avoidStronger ? $botScore : null),
-            BotTargetType::SIMILAR => $this->findSimilarTarget($bot, $botUserIds, $avoidStronger ? $botScore : null),
+            BotTargetType::RANDOM => $this->findRandomTarget($botUserIds, $selfId, $maxScore),
+            BotTargetType::WEAK => $this->findWeakTarget($bot, $botUserIds, $maxScore),
+            BotTargetType::RICH => $this->findRichTarget($bot, $botUserIds, $maxScore),
+            BotTargetType::SIMILAR => $this->findSimilarTarget($bot, $botUserIds, $maxScore),
         };
     }
 
@@ -55,7 +57,7 @@ class BotTargetFinderService
                 $q->where('vacation_mode', false);
                 if ($maxScore !== null && $maxScore > 0) {
                     $q->whereHas('highscore', function ($hq) use ($maxScore) {
-                        $hq->where('general', '<=', $maxScore * 1.2);
+                        $hq->where('general', '<=', $maxScore);
                     });
                 }
             })
@@ -94,7 +96,7 @@ class BotTargetFinderService
                   });
                 if ($maxScore !== null && $maxScore > 0) {
                     $q->whereHas('highscore', function ($hq) use ($maxScore) {
-                        $hq->where('general', '<=', $maxScore * 1.2);
+                        $hq->where('general', '<=', $maxScore);
                     });
                 }
             })
@@ -127,7 +129,7 @@ class BotTargetFinderService
                 $q->where('vacation_mode', false);
                 if ($maxScore !== null && $maxScore > 0) {
                     $q->whereHas('highscore', function ($hq) use ($maxScore) {
-                        $hq->where('general', '<=', $maxScore * 1.2);
+                        $hq->where('general', '<=', $maxScore);
                     });
                 }
             })
@@ -167,7 +169,7 @@ class BotTargetFinderService
                   });
                 if ($maxScore !== null && $maxScore > 0) {
                     $q->whereHas('highscore', function ($hq) use ($maxScore) {
-                        $hq->where('general', '<=', $maxScore * 1.2);
+                        $hq->where('general', '<=', $maxScore);
                     });
                 }
             })

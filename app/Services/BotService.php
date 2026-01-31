@@ -1732,8 +1732,9 @@ class BotService
 
         $state = (new GameStateAnalyzer())->analyzeCurrentState($this);
         $imbalance = (float) ($state['resource_imbalance'] ?? 0.0);
+        $minImbalance = (float) config('bots.merchant_trade_min_imbalance', 0.35);
 
-        if ($imbalance < 0.35 && !$this->isStoragePressureHigh()) {
+        if ($imbalance < $minImbalance && !$this->isStoragePressureHigh()) {
             return false;
         }
 
@@ -1781,7 +1782,10 @@ class BotService
             }
 
             $giveAvailable = (int) $resourceAmounts[$giveResource];
-            $giveAmount = (int) min(max(5000, $giveAvailable * 0.2), $giveAvailable);
+            $minGive = (int) config('bots.merchant_trade_amount_min', 5000);
+            $ratio = (float) config('bots.merchant_trade_amount_ratio', 0.2);
+            $maxRatio = (float) config('bots.merchant_trade_amount_max_ratio', 0.5);
+            $giveAmount = (int) min(max($minGive, $giveAvailable * $ratio), $giveAvailable * $maxRatio, $giveAvailable);
             if ($giveAmount <= 0) {
                 return false;
             }
@@ -2167,6 +2171,24 @@ class BotService
         return max(10, min(200, $base));
     }
 
+    private function getAttackProfitRatio(): float
+    {
+        $base = (float) config('bots.attack_expected_loss_min_profit_ratio', 0.3);
+        $metrics = new BotStrategicMetrics();
+        $state = (new GameStateAnalyzer())->analyzeCurrentState($this);
+        $growth = $metrics->getGrowthRate($state, $this->bot->id);
+        $efficiency = $metrics->getResourceEfficiency($state, $this->bot->id);
+
+        if ($growth > 20 && $efficiency > 0.9) {
+            return max(0.2, $base - 0.05);
+        }
+        if ($growth < 5 || $efficiency < 0.6) {
+            return min(0.5, $base + 0.1);
+        }
+
+        return $base;
+    }
+
     private function estimateAttackLossRatio(int $attackPower, int $defensePower): float
     {
         $ratio = $attackPower / max(1, $defensePower);
@@ -2183,6 +2205,14 @@ class BotService
     private function shouldAbortAttackByPhalanx(PlanetService $source, PlanetService $target, \OGame\GameObjects\Models\Units\UnitCollection $fleet, float $speedPercent): bool
     {
         try {
+            if (!config('bots.attack_phalanx_scan_enabled', true)) {
+                return false;
+            }
+            $scanChance = (float) config('bots.attack_phalanx_scan_chance', 0.35);
+            if ($scanChance <= 0 || mt_rand(1, 100) > ($scanChance * 100)) {
+                return false;
+            }
+
             $moons = $this->player->planets->allMoons();
             if (empty($moons)) {
                 return false;
@@ -2212,8 +2242,9 @@ class BotService
                 $moon->planet->save();
 
                 $scan = $phalanxService->scanPlanetFleets($target->getPlanetId(), $this->player->getId());
+                $abortWindow = (int) config('bots.attack_phalanx_abort_window_seconds', 300);
                 foreach ($scan as $fleetInfo) {
-                    if (!empty($fleetInfo['is_incoming']) && ($fleetInfo['time_arrival'] ?? 0) <= ($arrival + 300)) {
+                    if (!empty($fleetInfo['is_incoming']) && ($fleetInfo['time_arrival'] ?? 0) <= ($arrival + $abortWindow)) {
                         $this->logAction(BotActionType::ATTACK, 'Phalanx scan indicates incoming support, aborting attack', [
                             'target' => $targetCoords->asString(),
                         ], 'failed');
@@ -2327,7 +2358,8 @@ class BotService
                     + ($report->resources['deuterium'] ?? 0));
             }
             $cargoCapacity = $fleet->getTotalCargoCapacity($this->player);
-            if ($cargoCapacity <= 0 || $lootEstimate < ($cargoCapacity * 0.2)) {
+            $minLootRatio = (float) config('bots.attack_min_loot_ratio_capacity', 0.2);
+            if ($cargoCapacity <= 0 || $lootEstimate < ($cargoCapacity * $minLootRatio)) {
                 $this->logAction(BotActionType::ATTACK, 'Target loot too low for fleet capacity', [
                     'loot' => $lootEstimate,
                     'capacity' => $cargoCapacity,
@@ -2365,8 +2397,11 @@ class BotService
             }
 
             $lossRatio = $this->estimateAttackLossRatio($attackPower, max($targetPower, $reportPower ?? 0));
-            $expectedLossCost = (int) ($attackPower * $lossRatio * 1000);
-            $minProfit = (int) ($consumption + ($expectedLossCost * 0.3));
+            $lossMultiplier = (int) config('bots.attack_expected_loss_cost_multiplier', 1000);
+            $expectedLossCost = (int) ($attackPower * $lossRatio * $lossMultiplier);
+            $profitRatio = $this->getAttackProfitRatio();
+            $consumptionMultiplier = (float) config('bots.attack_min_profit_consumption_multiplier', 1.0);
+            $minProfit = (int) (($consumption * $consumptionMultiplier) + ($expectedLossCost * $profitRatio));
             if ($lootEstimate < $minProfit) {
                 $this->logAction(BotActionType::ATTACK, 'Attack not profitable after expected losses', [
                     'loot' => $lootEstimate,
@@ -2526,7 +2561,8 @@ class BotService
 
         // Calculate profitability
         $report = $this->getLatestEspionageReport($candidate);
-        if ($report && $report->created_at && $report->created_at->diffInMinutes(now()) < 30) {
+        $maxIntelAge = (int) config('bots.target_intel_max_age_minutes', 30);
+        if ($report && $report->created_at && $report->created_at->diffInMinutes(now()) < $maxIntelAge) {
             $loot = (int) (($report->resources['metal'] ?? 0) + ($report->resources['crystal'] ?? 0) + ($report->resources['deuterium'] ?? 0));
             if ($loot < 10000) {
                 $this->logAction(BotActionType::ATTACK, 'Target not profitable enough', [
@@ -2610,7 +2646,8 @@ class BotService
             return false;
         }
 
-        return $report->created_at && $report->created_at->diffInMinutes(now()) < 20;
+        $maxAge = (int) config('bots.espionage_report_max_age_minutes', 20);
+        return $report->created_at && $report->created_at->diffInMinutes(now()) < $maxAge;
     }
 
     private function getLatestEspionageReport(PlanetService $target): ?EspionageReport

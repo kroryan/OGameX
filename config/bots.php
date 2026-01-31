@@ -50,6 +50,24 @@ return [
     'default_activity_cycle_minutes' => 240,
     'default_activity_window_minutes' => 20,
 
+    // Strategic thresholds and tuning
+    'espionage_report_max_age_minutes' => 20,
+    'target_intel_max_age_minutes' => 30,
+    'attack_min_loot_ratio_capacity' => 0.2,
+    'attack_expected_loss_cost_multiplier' => 1000,
+    'attack_expected_loss_min_profit_ratio' => 0.3,
+    'attack_min_profit_consumption_multiplier' => 1.0,
+    'attack_phalanx_scan_enabled' => true,
+    'attack_phalanx_scan_chance' => 0.35,
+    'attack_phalanx_abort_window_seconds' => 300,
+    'avoid_stronger_player_ratio' => 1.2,
+
+    // Merchant trade tuning
+    'merchant_trade_min_imbalance' => 0.35,
+    'merchant_trade_amount_min' => 5000,
+    'merchant_trade_amount_ratio' => 0.2,
+    'merchant_trade_amount_max_ratio' => 0.5,
+
     // Maximum percentage of units to send in an attack (bot keeps rest for defense)
     'attack_fleet_percentage' => [
         'aggressive' => 0.9,

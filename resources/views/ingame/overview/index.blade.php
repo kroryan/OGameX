@@ -207,7 +207,7 @@ If the relocation is successful, you will be charged 240.000 Dark Matter. The pl
         <div class="c-left"></div>
         <div class="c-right"></div>
 
-        <div class="content-box-s" style="margin: 15px 0; width: 100%; max-width: 100%; clear: both;">
+        <div class="bot-mode-box" style="margin: 15px 0; width: 100%; max-width: 100%; clear: both;">
             <div class="header">
                 <h3>Bot Mode</h3>
             </div>
@@ -264,6 +264,31 @@ If the relocation is successful, you will be charged 240.000 Dark Matter. The pl
             </div>
             <div class="footer"></div>
         </div>
+
+        <style>
+            .bot-mode-box {
+                width: 100%;
+                float: none;
+                overflow: hidden;
+                margin: 10px 0 20px 0;
+            }
+            .bot-mode-box .header {
+                background: url("/img/icons/b9de2f5b06c823d628d22c4067ee35.gif") no-repeat;
+                background-size: 100% 32px;
+                height: 32px;
+                font-size: 11px;
+            }
+            .bot-mode-box .content {
+                background: url("/img/icons/bd764e9b39a1a48ad708039fda1bde.gif") repeat-y;
+                background-size: 100% auto;
+                padding: 14px 18px;
+            }
+            .bot-mode-box .footer {
+                background: url("/img/icons/04a4a5cd40d7a7c394ee09fb1c809a41.gif") no-repeat;
+                background-size: 100% 16px;
+                height: 16px;
+            }
+        </style>
 
         <div id="productionboxBottom">
             <div class="productionBoxBuildings boxColumn building">

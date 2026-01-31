@@ -37,6 +37,7 @@ services:
       CONTAINER_ROLE: app
       SERVICE_NAME: app
       SERVICE_TAGS: dev
+      TZ: Europe/Madrid
     working_dir: /var/www
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:9000 || [ $? -eq 56 ]"]
@@ -59,6 +60,7 @@ services:
       - ./php/local.ini:/usr/local/etc/php/conf.d/local.ini
     environment:
       CONTAINER_ROLE: scheduler
+      TZ: Europe/Madrid
     networks:
       - app-network
     depends_on:
@@ -76,6 +78,7 @@ services:
       - ./php/local.ini:/usr/local/etc/php/conf.d/local.ini
     environment:
       CONTAINER_ROLE: queue
+      TZ: Europe/Madrid
     networks:
       - app-network
     depends_on:
@@ -110,6 +113,7 @@ services:
       - PMA_ARBITRARY=1
       - PMA_HOST=ogame-db
       - UPLOAD_LIMIT=1G
+      - TZ=Europe/Madrid
     networks:
       - app-network
 

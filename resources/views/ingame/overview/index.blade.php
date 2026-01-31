@@ -201,9 +201,7 @@ If the relocation is successful, you will be charged 240.000 Dark Matter. The pl
                                     <button type="submit" class="btn_blue" style="padding: 4px 8px;">Enable Bot Mode</button>
                                 @endif
                             </form>
-                            @if ($bot)
-                                <a href="{{ route('bot.logs') }}" class="btn_blue" style="padding: 4px 8px; margin-left: 6px; text-decoration: none;">Bot Logs</a>
-                            @endif
+                            <a href="{{ route('bot.logs') }}" class="btn_blue" style="padding: 4px 8px; margin-left: 6px; text-decoration: none;">Bot Logs</a>
                         </div>
                     </div>
                 </div>
@@ -224,6 +222,64 @@ If the relocation is successful, you will be charged 240.000 Dark Matter. The pl
         </div>
         <div class="c-left"></div>
         <div class="c-right"></div>
+
+        <div class="content-box-s" style="margin: 10px 0;">
+            <div class="header">
+                <h3>Bot Mode</h3>
+            </div>
+            <div class="content">
+                <form action="{{ route('options.save') }}" method="post">
+                    {{ csrf_field() }}
+                    <input type="hidden" name="bot_mode_present" value="1">
+                    <div class="fieldwrapper">
+                        <label class="styled textBeefy">Enable bot mode:</label>
+                        <div class="thefield">
+                            <input type="checkbox" name="bot_mode_enabled" {{ ($bot && $bot->is_active) ? 'checked' : '' }}>
+                        </div>
+                    </div>
+                    <div class="fieldwrapper">
+                        <label class="styled textBeefy">Personality:</label>
+                        <div class="thefield">
+                            @php
+                                $personalityValue = $bot ? $bot->personality : 'balanced';
+                            @endphp
+                            <select name="bot_personality" class="textInput w200 textCenter textBeefy">
+                                <option value="aggressive" {{ $personalityValue === 'aggressive' ? 'selected' : '' }}>Aggressive</option>
+                                <option value="defensive" {{ $personalityValue === 'defensive' ? 'selected' : '' }}>Defensive</option>
+                                <option value="economic" {{ $personalityValue === 'economic' ? 'selected' : '' }}>Economic</option>
+                                <option value="balanced" {{ $personalityValue === 'balanced' ? 'selected' : '' }}>Balanced</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="fieldwrapper">
+                        <label class="styled textBeefy">Target type:</label>
+                        <div class="thefield">
+                            @php
+                                $targetValue = $bot ? $bot->priority_target_type : 'random';
+                            @endphp
+                            <select name="bot_target_type" class="textInput w200 textCenter textBeefy">
+                                <option value="random" {{ $targetValue === 'random' ? 'selected' : '' }}>Random</option>
+                                <option value="weak" {{ $targetValue === 'weak' ? 'selected' : '' }}>Weak Players</option>
+                                <option value="rich" {{ $targetValue === 'rich' ? 'selected' : '' }}>Rich Players</option>
+                                <option value="similar" {{ $targetValue === 'similar' ? 'selected' : '' }}>Similar Strength</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="fieldwrapper">
+                        <label class="styled textBeefy">Max fleets in flight:</label>
+                        <div class="thefield">
+                            <input type="text" pattern="[0-9]*" class="textInput w50 textCenter textBeefy"
+                                   value="{{ $bot ? $bot->max_fleets_sent : 3 }}" size="2" maxlength="2" name="bot_max_fleets_sent">
+                        </div>
+                    </div>
+                    <div class="fieldwrapper">
+                        <input type="submit" class="btn_blue" value="Save Bot Settings">
+                        <a href="{{ route('bot.logs') }}" class="btn_blue" style="margin-left: 8px; text-decoration: none;">Bot Logs</a>
+                    </div>
+                </form>
+            </div>
+            <div class="footer"></div>
+        </div>
 
         <div id="productionboxBottom">
             <div class="productionBoxBuildings boxColumn building">

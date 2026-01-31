@@ -186,7 +186,7 @@ class OptionsController extends OGameController
         if (!$bot) {
             $bot = Bot::create([
                 'user_id' => $player->getId(),
-                'name' => $player->getUsername() . ' Bot',
+                'name' => $player->getUsername(false) . ' Bot',
                 'personality' => $personality,
                 'priority_target_type' => $targetType,
                 'max_fleets_sent' => $maxFleets,

@@ -182,8 +182,8 @@ class Bot extends Model
     {
         $default = [
             'save_for_upgrade_percent' => 0.3, // Save 30% of production for upgrades
-            'min_resources_for_actions' => 10000, // Minimum resources to perform actions
-            'max_storage_before_spending' => 0.9, // Only spend if storage is 90% full
+            'min_resources_for_actions' => 500, // Minimum resources to perform actions
+            'max_storage_before_spending' => 0.7, // Only spend if storage is 70% full
             'prioritize_production' => 'balanced', // 'balanced', 'metal', 'crystal', 'deuterium'
         ];
 

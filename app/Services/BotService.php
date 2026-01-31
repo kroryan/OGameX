@@ -356,7 +356,10 @@ class BotService
         $reserve = (float) ($economy['save_for_upgrade_percent'] ?? 0.3);
         $maxStorageBeforeSpending = (float) ($economy['max_storage_before_spending'] ?? 0.9);
         $usagePercent = $this->getStorageUsagePercent($planet);
-        if ($usagePercent < $maxStorageBeforeSpending) {
+        if ($total < 5000) {
+            // Early game: spend more aggressively to avoid stalling.
+            $reserve = min($reserve, 0.2);
+        } elseif ($usagePercent < $maxStorageBeforeSpending) {
             // Keep more resources when storage isn't pressured
             $reserve = min(0.9, max($reserve, 0.6));
         }

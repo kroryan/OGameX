@@ -25,7 +25,7 @@ class GameStateAnalyzer
         $player = $botService->getPlayer();
         $planets = $player->planets->all();
         $economy = $botService->getBot()->getEconomySettings();
-        $minResources = (int) ($economy['min_resources_for_actions'] ?? 10000);
+        $minResources = (int) ($economy['min_resources_for_actions'] ?? 500);
 
         // Calculate total points
         $totalPoints = 0;

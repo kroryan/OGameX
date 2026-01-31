@@ -242,8 +242,8 @@ Sobrescribe las probabilidades por defecto de la personalidad.
 ```json
 {
   "save_for_upgrade_percent": 0.3,
-  "min_resources_for_actions": 10000,
-  "max_storage_before_spending": 0.9,
+  "min_resources_for_actions": 500,
+  "max_storage_before_spending": 0.7,
   "prioritize_production": "balanced"
 }
 ```
@@ -251,6 +251,22 @@ Sobrescribe las probabilidades por defecto de la personalidad.
 - `min_resources_for_actions`: Recursos mínimos para actuar
 - `max_storage_before_spending`: Máximo uso de almacenador antes de gastar
 - `prioritize_production`: 'balanced', 'metal', 'crystal', o 'deuterium'
+
+### Estrategia Adaptativa y ROI
+
+El sistema de bots ajusta su estrategia automáticamente usando métricas ligeras:
+
+- **ROI aproximado** por acción (build/research/fleet/attack/trade) para priorizar mejoras con retorno rápido.
+- **Riesgo** (amenazas activas, falta de slots de flota, recursos bajos) para evitar decisiones suicidas.
+- **Métricas de crecimiento** (puntos/hora) y **eficiencia** (puntos vs producción) para adaptar probabilidades.
+
+Cuando el bot detecta estancamiento:
+- Reduce el ahorro para upgrades y gasta más agresivamente.
+- Aumenta prioridad de construcción y reduce flota si no hay progreso.
+
+Cuando el bot crece rápido:
+- Aumenta prioridad de flota y ataques.
+- Mantiene build/research en niveles sanos.
 
 #### fleet_settings (Configuración de Flota)
 ```json

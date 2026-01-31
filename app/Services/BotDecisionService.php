@@ -19,12 +19,14 @@ class BotDecisionService
     private BotService $botService;
     private GameStateAnalyzer $stateAnalyzer;
     private BotObjectiveService $objectiveService;
+    private AdaptiveStrategyService $adaptiveStrategy;
 
     public function __construct(BotService $botService)
     {
         $this->botService = $botService;
         $this->stateAnalyzer = new GameStateAnalyzer();
         $this->objectiveService = new BotObjectiveService();
+        $this->adaptiveStrategy = new AdaptiveStrategyService();
     }
 
     /**
@@ -41,6 +43,9 @@ class BotDecisionService
             now()->addMinutes(5),
             fn() => $this->botService->findTarget() !== null
         );
+
+        // Adaptive tuning based on live metrics
+        $this->adaptiveStrategy->adaptIfNeeded($this->botService, $state);
 
         // Step 2: Determine objective based on personality and game phase
         $objective = $this->objectiveService->determineObjective(
@@ -148,6 +153,10 @@ class BotDecisionService
         // Add strategic bonus for certain combinations
         $strategicBonus = $this->getStrategicBonus($action, $objective, $state);
         $score += $strategicBonus;
+
+        // ROI/risk adjustments
+        $score += $this->getRoiBonus($action, $state);
+        $score -= $this->getRiskPenalty($action, $state);
 
         // Ensure minimum score
         return max(1.0, $score);
@@ -264,6 +273,73 @@ class BotDecisionService
         }
 
         return $modifier;
+    }
+
+    private function getRoiBonus(BotActionType $action, array $state): float
+    {
+        $bonus = 0.0;
+        $production = $state['total_production'] ?? ['metal' => 0, 'crystal' => 0, 'deuterium' => 0];
+        $prodSum = (int) ($production['metal'] + $production['crystal'] + $production['deuterium']);
+        $resourceSum = (int) ($state['total_resources_sum'] ?? 0);
+
+        switch ($action) {
+            case BotActionType::BUILD:
+                if ($prodSum > 0) {
+                    $bonus += min(25, ($prodSum / 1000) * 5);
+                }
+                if (!empty($state['is_storage_pressure_high'])) {
+                    $bonus += 10;
+                }
+                break;
+            case BotActionType::RESEARCH:
+                if (($state['research_points'] ?? 0) < ($state['building_points'] ?? 0) * 0.6) {
+                    $bonus += 15;
+                }
+                break;
+            case BotActionType::FLEET:
+                if (($state['fleet_points'] ?? 0) < ($state['building_points'] ?? 0) * 0.3) {
+                    $bonus += 10;
+                }
+                if ($resourceSum > 20000) {
+                    $bonus += 5;
+                }
+                break;
+            case BotActionType::ATTACK:
+                if (!empty($state['has_attack_target'])) {
+                    $bonus += 15;
+                }
+                break;
+            case BotActionType::TRADE:
+                $imbalance = (float) ($state['resource_imbalance'] ?? 0.0);
+                $bonus += min(20, $imbalance * 30);
+                break;
+        }
+
+        return $bonus;
+    }
+
+    private function getRiskPenalty(BotActionType $action, array $state): float
+    {
+        $penalty = 0.0;
+        $resourceSum = (int) ($state['total_resources_sum'] ?? 0);
+
+        if (!empty($state['is_under_threat'])) {
+            if ($action === BotActionType::ATTACK) {
+                $penalty += 30;
+            } elseif ($action === BotActionType::FLEET) {
+                $penalty += 10;
+            }
+        }
+
+        if ($resourceSum < 3000 && $action === BotActionType::ATTACK) {
+            $penalty += 20;
+        }
+
+        if (empty($state['fleet_slots_available']) && $action === BotActionType::FLEET) {
+            $penalty += 15;
+        }
+
+        return $penalty;
     }
 
     /**

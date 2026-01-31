@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Support\Carbon;
+use OGame\Models\User;
 
 /**
  *
@@ -175,6 +176,14 @@ use Illuminate\Support\Carbon;
 class Planet extends Model
 {
     use HasFactory;
+
+    /**
+     * Get the user that owns the planet.
+     */
+    public function user(): BelongsTo
+    {
+        return $this->belongsTo(User::class);
+    }
 
     /**
      * Get the planet that owns the research queue record.

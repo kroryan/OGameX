@@ -209,7 +209,7 @@ If the relocation is successful, you will be charged 240.000 Dark Matter. The pl
 
         <div class="bot-mode-box" style="margin: 15px 0; width: 100%; max-width: 100%; clear: both;">
             <div class="header">
-                <h3>Bot Mode</h3>
+                <h3 style="margin: 6px 0 0 10px;">Bot Mode</h3>
             </div>
             <div class="content" style="padding: 14px 18px;">
                 <form action="{{ route('options.save') }}" method="post">

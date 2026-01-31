@@ -642,6 +642,17 @@ class BotService
                 return false;
             }
 
+            if ($this->isPlanetFieldFull($planet)) {
+                if ($this->canBuildTerraformer($planet)) {
+                    return $this->buildTerraformer($planet);
+                }
+
+                $this->logAction(BotActionType::BUILD, 'Planet fields full and terraformer unavailable', [
+                    'planet' => $planet->getPlanetName(),
+                ], 'failed');
+                return false;
+            }
+
             // Get buildable buildings with smart prioritization
             $buildings = ObjectService::getBuildingObjects();
             $affordableBuildings = [];
@@ -839,6 +850,10 @@ class BotService
             }
         }
 
+        if ($machineName === 'terraformer' && $this->isPlanetFieldFull($planet)) {
+            $base += 80;
+        }
+
         // ROI: prefer upgrades with fast payback
         $productionGain = $this->estimateProductionGain($machineName, $planet, $currentLevel);
         if ($productionGain > 0 && $cost > 0) {
@@ -848,6 +863,48 @@ class BotService
         }
 
         return max(10, min(200, $base));
+    }
+
+    private function isPlanetFieldFull(PlanetService $planet): bool
+    {
+        try {
+            return $planet->getBuildingCount() >= $planet->getPlanetFieldMax();
+        } catch (Exception) {
+            return false;
+        }
+    }
+
+    private function canBuildTerraformer(PlanetService $planet): bool
+    {
+        if (!ObjectService::objectRequirementsMet('terraformer', $planet)) {
+            return false;
+        }
+        if ($this->isBuildingQueueFull($planet)) {
+            return false;
+        }
+        $price = ObjectService::getObjectPrice('terraformer', $planet);
+        $budget = $this->getSpendableBudget($planet);
+        $cost = $price->metal->get() + $price->crystal->get() + $price->deuterium->get();
+        return $cost <= $budget;
+    }
+
+    private function buildTerraformer(PlanetService $planet): bool
+    {
+        try {
+            $queueService = app(BuildingQueueService::class);
+            $queueService->add($planet, ObjectService::getObjectByMachineName('terraformer')->id);
+            $price = ObjectService::getObjectPrice('terraformer', $planet);
+            $this->logAction(BotActionType::BUILD, "Built terraformer on {$planet->getPlanetName()}", [
+                'metal' => $price->metal->get(),
+                'crystal' => $price->crystal->get(),
+                'deuterium' => $price->deuterium->get(),
+            ]);
+            $this->bot->updateLastAction();
+            return true;
+        } catch (Exception $e) {
+            $this->logAction(BotActionType::BUILD, "Failed to build terraformer: {$e->getMessage()}", [], 'failed');
+            return false;
+        }
     }
 
     private function estimateProductionGain(string $machineName, PlanetService $planet, int $currentLevel): int

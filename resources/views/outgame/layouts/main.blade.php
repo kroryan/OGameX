@@ -19,6 +19,13 @@
 -->
     <!-- CSRF Token -->
     <meta name="csrf-token" content="{{ csrf_token() }}">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#0b0f1a">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="OGameX">
+    <meta name="mobile-web-app-capable" content="yes">
+    <link rel="manifest" href="/manifest.webmanifest">
     <meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>
     <meta name="language" content="en"/>
     <meta name="author" content="OGameX"/>
@@ -34,9 +41,17 @@
     <meta name="Revisit" content="After 14 days"/>
     <title>{{ config('app.name', 'Laravel') }}</title>
 
-    <link rel="apple-touch-icon" href="/img/outgame/20da7e6c416e6cd5f8544a73f588e5.png"/>
+    <link rel="apple-touch-icon" href="/img/pwa/icon-180.png"/>
+    <link rel="icon" type="image/png" sizes="192x192" href="/img/pwa/icon-192.png">
     <link rel="stylesheet" href="{{ mix('css/outgame.css') }}">
     <script type="text/javascript" src="{{ mix('js/outgame.min.js') }}"></script>
+    <script type="text/javascript">
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', function () {
+                navigator.serviceWorker.register('/sw.js', {scope: '/'})['catch'](function () {});
+            });
+        }
+    </script>
 
     <script type="text/javascript">
         // <![CDATA[

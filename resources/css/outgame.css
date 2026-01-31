@@ -16,3 +16,55 @@ TODO: Remove these at a later time if they are not needed anymore.
 <link rel="stylesheet" type="text/css" href="css/outgame/9253d1dbc4e5de58100a2db4b3b5b1.css" />
 <![endif]-->
  */
+/* Mobile-friendly overrides */
+@media (max-width: 900px) {
+    html,
+    body {
+        height: 100%;
+        -webkit-text-size-adjust: 100%;
+    }
+
+    #header,
+    #content,
+    #contentWrap,
+    #subscribe,
+    #subscribeForm,
+    #menu,
+    .tabContent,
+    #contentFooter {
+        width: 100%;
+        max-width: 100%;
+        float: none;
+        margin-left: auto;
+        margin-right: auto;
+    }
+
+    #subscribe {
+        margin: 16px auto;
+    }
+
+    #subscribeForm {
+        height: auto;
+    }
+
+    #tabs {
+        width: 100%;
+        margin: 0;
+        float: none;
+    }
+
+    #tabs li {
+        width: 33.3333%;
+    }
+
+    .tabContent {
+        width: calc(100% - 20px);
+        padding: 12px 10px;
+        background-position: left top;
+    }
+
+    #login {
+        position: static;
+        margin: 16px auto 0;
+    }
+}

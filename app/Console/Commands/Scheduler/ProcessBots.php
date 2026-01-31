@@ -122,6 +122,18 @@ class ProcessBots extends Command
 
         $this->refreshBotQueues($bot);
 
+        if (config('bots.allow_alliances', true)) {
+            $bot->ensureAlliance();
+        }
+
+        if ($bot->isUnderThreat()) {
+            if ($bot->performFleetSave()) {
+                $this->line('  - Defensive action: fleet save initiated');
+                $bot->getBot()->updateLastAction();
+                return;
+            }
+        }
+
         // Decide next action
         $decisionService = new BotDecisionService($bot);
         $action = $decisionService->decideNextAction();

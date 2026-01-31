@@ -13,9 +13,11 @@ use OGame\Models\Planet;
 use OGame\Models\Resources;
 use OGame\Models\FleetMission;
 use OGame\Models\EspionageReport;
+use OGame\Models\Alliance;
 use OGame\Services\ObjectService;
 use OGame\Services\ObjectServiceFactory;
 use OGame\Factories\PlanetServiceFactory;
+use Illuminate\Support\Str;
 
 /**
  * BotService - Handles playerbot actions and decisions with enhanced logic.
@@ -429,6 +431,90 @@ class BotService
             ->count();
 
         return $incoming > 0;
+    }
+
+    public function performFleetSave(): bool
+    {
+        try {
+            if (!$this->hasFleetSlotsAvailable()) {
+                return false;
+            }
+
+            $source = $this->getRichestPlanet();
+            if ($source === null) {
+                return false;
+            }
+
+            $target = $this->findSafePlanetForSave($source);
+            if ($target === null) {
+                return false;
+            }
+
+            $units = $source->getShipUnits();
+            if ($units->getAmount() === 0) {
+                return false;
+            }
+
+            $fleet = new \OGame\GameObjects\Models\Units\UnitCollection();
+            foreach ($units->units as $unitObj) {
+                $sendAmount = max(0, $unitObj->amount - 1);
+                if ($sendAmount > 0) {
+                    $fleet->addUnit($unitObj->unitObject, $sendAmount);
+                }
+            }
+
+            if ($fleet->getAmount() === 0) {
+                return false;
+            }
+
+            $fleetMissionService = app(FleetMissionService::class);
+            $targetCoords = $target->getPlanetCoordinates();
+            $consumption = $fleetMissionService->calculateConsumption($source, $fleet, $targetCoords, 4, 100);
+            if ($source->getResources()->deuterium->get() < $consumption) {
+                return false;
+            }
+
+            $fleetMissionService->createNewFromPlanet(
+                $source,
+                $targetCoords,
+                \OGame\Models\Enums\PlanetType::Planet,
+                4,
+                $fleet,
+                new Resources(0, 0, 0, 0),
+                100,
+                0
+            );
+
+            $this->logAction(BotActionType::FLEET, "Fleet save to {$targetCoords->asString()}", [
+                'consumption' => $consumption,
+            ]);
+
+            return true;
+        } catch (Exception) {
+            return false;
+        }
+    }
+
+    private function findSafePlanetForSave(PlanetService $source): ?PlanetService
+    {
+        $planets = $this->player->planets->all();
+        if (empty($planets)) {
+            return null;
+        }
+
+        foreach ($planets as $planet) {
+            if ($planet->getPlanetId() !== $source->getPlanetId() && $planet->hasMoon()) {
+                return $planet->moon();
+            }
+        }
+
+        foreach ($planets as $planet) {
+            if ($planet->getPlanetId() !== $source->getPlanetId()) {
+                return $planet;
+            }
+        }
+
+        return null;
     }
 
     public function sendColonization(): bool
@@ -1558,6 +1644,10 @@ class BotService
                     $this->logAction(BotActionType::ATTACK, 'Espionage report indicates target too strong', [
                         'report_power' => $reportPower,
                     ], 'failed');
+                    if ($this->sendMissileAttack($target, $report)) {
+                        $this->bot->updateLastAction();
+                        return true;
+                    }
                     return false;
                 }
             }
@@ -1844,6 +1934,80 @@ class BotService
             return true;
         } catch (Exception) {
             return false;
+        }
+    }
+
+    public function sendMissileAttack(PlanetService $target, ?EspionageReport $report = null): bool
+    {
+        try {
+            $source = $this->getRichestPlanet();
+            if ($source === null) {
+                return false;
+            }
+
+            $missiles = $source->getObjectAmount('interplanetary_missile');
+            if ($missiles < 1) {
+                return false;
+            }
+
+            $targetCoords = $target->getPlanetCoordinates();
+            $range = $this->player->getMissileRange();
+            $distance = abs($source->getPlanetCoordinates()->system - $targetCoords->system);
+            if ($source->getPlanetCoordinates()->galaxy !== $targetCoords->galaxy || $distance > $range) {
+                return false;
+            }
+
+            $fleet = new \OGame\GameObjects\Models\Units\UnitCollection();
+            $sendAmount = min(10, $missiles);
+            $fleet->addUnit(ObjectService::getUnitObjectByMachineName('interplanetary_missile'), $sendAmount);
+
+            $fleetMissionService = app(FleetMissionService::class);
+            $fleetMissionService->createNewFromPlanet(
+                $source,
+                $targetCoords,
+                \OGame\Models\Enums\PlanetType::Planet,
+                10,
+                $fleet,
+                new Resources(0, 0, 0, 0),
+                100,
+                0
+            );
+
+            $this->logAction(BotActionType::ATTACK, "Launched missiles to {$targetCoords->asString()}", [
+                'missiles' => $sendAmount,
+            ]);
+
+            return true;
+        } catch (Exception) {
+            return false;
+        }
+    }
+
+    public function ensureAlliance(): void
+    {
+        try {
+            $user = $this->player->getUser();
+            if ($user->alliance_id) {
+                return;
+            }
+
+            if (mt_rand(1, 100) > 5) {
+                return;
+            }
+
+            $openAlliance = Alliance::where('is_open', true)->inRandomOrder()->first();
+            $allianceService = app(\OGame\Services\AllianceService::class);
+
+            if ($openAlliance) {
+                $allianceService->applyToAlliance($user->id, $openAlliance->id, 'Bot auto-application');
+                return;
+            }
+
+            $tag = strtoupper(Str::random(4));
+            $name = 'Bot Legion ' . strtoupper(Str::random(3));
+            $allianceService->createAlliance($user->id, $tag, $name);
+        } catch (Exception) {
+            // Ignore alliance errors
         }
     }
 

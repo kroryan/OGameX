@@ -32,6 +32,9 @@ return [
     // Allow bots to target other bots (true = bots can attack bots)
     'allow_target_bots' => true,
 
+    // Allow bots to join/create alliances
+    'allow_alliances' => true,
+
     // Maximum level a bot will build buildings/research to
     'max_building_level' => 30,
     'max_research_level' => 10,

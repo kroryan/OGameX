@@ -85,6 +85,8 @@ class ProcessBots extends Command
             return;
         }
 
+        $this->refreshBotQueues($bot);
+
         // Decide next action
         $decisionService = new BotDecisionService($bot);
         $action = $decisionService->decideNextAction();
@@ -112,6 +114,30 @@ class ProcessBots extends Command
             $this->line("  - Result: Success");
         } else {
             $this->line("  - Result: Failed");
+        }
+    }
+
+    /**
+     * Update queues/resources so bots don't get stuck with stale state.
+     */
+    private function refreshBotQueues(BotService $bot): void
+    {
+        $player = $bot->getPlayer();
+
+        try {
+            $player->updateResearchQueue(true);
+        } catch (\Exception $e) {
+            $this->error("  - Research queue update failed: {$e->getMessage()}");
+        }
+
+        foreach ($player->planets->all() as $planet) {
+            try {
+                $planet->updateBuildingQueue(true);
+                $planet->updateUnitQueue(true);
+                $planet->updateResources(true);
+            } catch (\Exception $e) {
+                $this->error("  - Planet queue update failed (planet {$planet->getPlanetId()}): {$e->getMessage()}");
+            }
         }
     }
 

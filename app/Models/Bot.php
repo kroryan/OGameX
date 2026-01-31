@@ -106,15 +106,8 @@ class Bot extends Model
             return true;
         }
 
-        // Default activity cycle (20 minutes every 4 hours)
-        $cycleMinutes = (int) config('bots.default_activity_cycle_minutes', 240);
-        $windowMinutes = (int) config('bots.default_activity_window_minutes', 20);
-        if ($cycleMinutes <= 0 || $windowMinutes <= 0) {
-            return true;
-        }
-
-        $minutesSinceMidnight = (int) now()->format('H') * 60 + (int) now()->format('i');
-        return ($minutesSinceMidnight % $cycleMinutes) < $windowMinutes;
+        // Default: always active unless schedule is explicitly configured.
+        return true;
     }
 
     /**

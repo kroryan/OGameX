@@ -68,6 +68,10 @@ return [
     'merchant_trade_amount_ratio' => 0.2,
     'merchant_trade_amount_max_ratio' => 0.5,
 
+    // Metrics-driven tuning
+    'bot_metrics_window_days' => 7,
+    'bot_metrics_min_samples' => 20,
+
     // Maximum percentage of units to send in an attack (bot keeps rest for defense)
     'attack_fleet_percentage' => [
         'aggressive' => 0.9,

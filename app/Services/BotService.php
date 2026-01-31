@@ -1732,7 +1732,7 @@ class BotService
 
         $state = (new GameStateAnalyzer())->analyzeCurrentState($this);
         $imbalance = (float) ($state['resource_imbalance'] ?? 0.0);
-        $minImbalance = (float) config('bots.merchant_trade_min_imbalance', 0.35);
+        $minImbalance = $this->getMerchantMinImbalance();
 
         if ($imbalance < $minImbalance && !$this->isStoragePressureHigh()) {
             return false;
@@ -2174,6 +2174,15 @@ class BotService
     private function getAttackProfitRatio(): float
     {
         $base = (float) config('bots.attack_expected_loss_min_profit_ratio', 0.3);
+        $actionMetrics = app(BotActionMetricsService::class)->getAttackMetrics();
+        if (!empty($actionMetrics['sampled']) && isset($actionMetrics['success_rate'])) {
+            if ($actionMetrics['success_rate'] < 0.2) {
+                $base += 0.05;
+            } elseif ($actionMetrics['success_rate'] > 0.5) {
+                $base -= 0.05;
+            }
+        }
+
         $metrics = new BotStrategicMetrics();
         $state = (new GameStateAnalyzer())->analyzeCurrentState($this);
         $growth = $metrics->getGrowthRate($state, $this->bot->id);
@@ -2187,6 +2196,36 @@ class BotService
         }
 
         return $base;
+    }
+
+    private function getAttackMinLootRatio(): float
+    {
+        $base = (float) config('bots.attack_min_loot_ratio_capacity', 0.2);
+        $metrics = app(BotActionMetricsService::class)->getAttackMetrics();
+        if (!empty($metrics['sampled']) && isset($metrics['success_rate'])) {
+            if ($metrics['success_rate'] < 0.2) {
+                $base += 0.05;
+            } elseif ($metrics['success_rate'] > 0.5) {
+                $base -= 0.05;
+            }
+        }
+
+        return max(0.1, min(0.35, $base));
+    }
+
+    private function getMerchantMinImbalance(): float
+    {
+        $base = (float) config('bots.merchant_trade_min_imbalance', 0.35);
+        $metrics = app(BotActionMetricsService::class)->getTradeMetrics();
+        if (!empty($metrics['sampled']) && isset($metrics['success_rate'])) {
+            if ($metrics['success_rate'] < 0.2) {
+                $base += 0.05;
+            } elseif ($metrics['success_rate'] > 0.6) {
+                $base -= 0.05;
+            }
+        }
+
+        return max(0.15, min(0.6, $base));
     }
 
     private function estimateAttackLossRatio(int $attackPower, int $defensePower): float
@@ -2358,7 +2397,7 @@ class BotService
                     + ($report->resources['deuterium'] ?? 0));
             }
             $cargoCapacity = $fleet->getTotalCargoCapacity($this->player);
-            $minLootRatio = (float) config('bots.attack_min_loot_ratio_capacity', 0.2);
+            $minLootRatio = $this->getAttackMinLootRatio();
             if ($cargoCapacity <= 0 || $lootEstimate < ($cargoCapacity * $minLootRatio)) {
                 $this->logAction(BotActionType::ATTACK, 'Target loot too low for fleet capacity', [
                     'loot' => $lootEstimate,

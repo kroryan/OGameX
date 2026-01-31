@@ -224,12 +224,19 @@ class BotService
                 continue;
             }
 
+            if (!$this->hasPlanetFieldSpace($planet)) {
+                if ($this->canUpgradeTerraformer($planet, $ignoreReserve)) {
+                    return true;
+                }
+                continue;
+            }
+
             $budget = $this->getSpendableBudget($planet, $ignoreReserve);
             if ($budget <= 0) {
                 continue;
             }
 
-            $buildings = ObjectService::getBuildingObjects();
+            $buildings = [...ObjectService::getBuildingObjects(), ...ObjectService::getStationObjects()];
             foreach ($buildings as $building) {
                 $currentLevel = $planet->getObjectLevel($building->machine_name);
                 if ($currentLevel >= config('bots.max_building_level', 30)) {
@@ -728,8 +735,8 @@ class BotService
                 return false;
             }
 
-            if ($this->isPlanetFieldFull($planet)) {
-                if ($this->canBuildTerraformer($planet)) {
+            if (!$this->hasPlanetFieldSpace($planet)) {
+                if ($this->canUpgradeTerraformer($planet)) {
                     return $this->buildTerraformer($planet);
                 }
 
@@ -740,7 +747,7 @@ class BotService
             }
 
             // Get buildable buildings with smart prioritization
-            $buildings = ObjectService::getBuildingObjects();
+            $buildings = [...ObjectService::getBuildingObjects(), ...ObjectService::getStationObjects()];
             $affordableBuildings = [];
 
             foreach ($buildings as $building) {
@@ -748,6 +755,10 @@ class BotService
 
                 // Skip very high levels
                 if ($currentLevel >= config('bots.max_building_level', 30)) {
+                    continue;
+                }
+
+                if (!$this->hasPlanetFieldSpace($planet) && ($building->consumesPlanetField ?? true)) {
                     continue;
                 }
 
@@ -960,18 +971,31 @@ class BotService
         }
     }
 
-    private function canBuildTerraformer(PlanetService $planet): bool
+    private function hasPlanetFieldSpace(PlanetService $planet): bool
     {
-        if (!ObjectService::objectRequirementsMet('terraformer', $planet)) {
+        return !$this->isPlanetFieldFull($planet);
+    }
+
+    private function canUpgradeTerraformer(PlanetService $planet, bool $ignoreReserve = false): bool
+    {
+        try {
+            if ($this->isBuildingQueueFull($planet)) {
+                return false;
+            }
+            if (!ObjectService::objectRequirementsMet('terraformer', $planet)) {
+                return false;
+            }
+            $currentLevel = $planet->getObjectLevel('terraformer');
+            if ($currentLevel <= 0 && $this->isPlanetFieldFull($planet)) {
+                return false;
+            }
+            $price = ObjectService::getObjectPrice('terraformer', $planet);
+            $budget = $this->getSpendableBudget($planet, $ignoreReserve);
+            $cost = $price->metal->get() + $price->crystal->get() + $price->deuterium->get();
+            return $cost <= $budget;
+        } catch (Exception $e) {
             return false;
         }
-        if ($this->isBuildingQueueFull($planet)) {
-            return false;
-        }
-        $price = ObjectService::getObjectPrice('terraformer', $planet);
-        $budget = $this->getSpendableBudget($planet);
-        $cost = $price->metal->get() + $price->crystal->get() + $price->deuterium->get();
-        return $cost <= $budget;
     }
 
     private function buildTerraformer(PlanetService $planet): bool

@@ -108,7 +108,7 @@ class GameStateAnalyzer
             'can_afford_fleet' => $canAffordUnit && $totalResourceSum >= $minResources,
             'can_afford_research' => $canAffordResearch,
             'has_significant_fleet' => $fleetPoints > 50000,
-            'is_under_threat' => false, // Would implement threat detection
+            'is_under_threat' => $botService->isUnderThreat(),
             // Queue status
             'planets_with_building_space' => $planetsWithBuildingQueueSpace,
             'planets_with_research_space' => $planetsWithResearchQueueSpace,

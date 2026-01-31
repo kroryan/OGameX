@@ -11,6 +11,8 @@ use OGame\Models\Bot;
 use OGame\Models\BotLog;
 use OGame\Models\Planet;
 use OGame\Models\Resources;
+use OGame\Models\FleetMission;
+use OGame\Models\EspionageReport;
 use OGame\Services\ObjectService;
 use OGame\Services\ObjectServiceFactory;
 use OGame\Factories\PlanetServiceFactory;
@@ -405,7 +407,28 @@ class BotService
             $maxPlanets = min($maxPlanets, (int) $behavior['max_planets_to_colonize']);
         }
 
+        if ($this->isUnderThreat()) {
+            return false;
+        }
+
         return count($this->player->planets->all()) < $maxPlanets;
+    }
+
+    public function isUnderThreat(): bool
+    {
+        $planetIds = $this->player->planets->allIds();
+        if (empty($planetIds)) {
+            return false;
+        }
+
+        $incoming = FleetMission::whereIn('planet_id_to', $planetIds)
+            ->where('canceled', 0)
+            ->where('processed', 0)
+            ->whereIn('mission_type', [1, 6, 9, 10])
+            ->where('time_arrival', '>', now()->timestamp)
+            ->count();
+
+        return $incoming > 0;
     }
 
     public function sendColonization(): bool
@@ -873,7 +896,9 @@ class BotService
             $fleetSettings = $this->bot->getFleetSettings();
 
             // Get buildable units with smart selection
-            $units = ObjectService::getUnitObjects();
+            $units = $this->isUnderThreat()
+                ? ObjectService::getDefenseObjects()
+                : ObjectService::getUnitObjects();
             $affordableUnits = [];
 
             foreach ($units as $unit) {
@@ -1066,6 +1091,10 @@ class BotService
             }
         }
 
+        if ($this->isUnderThreat() && in_array($machineName, $defenseUnits)) {
+            $base += 30;
+        }
+
         if ($machineName === 'colony_ship' && $this->shouldColonize()) {
             $base += 40;
         }
@@ -1078,6 +1107,9 @@ class BotService
 
     public function shouldTradeResources(): bool
     {
+        if ($this->isUnderThreat()) {
+            return false;
+        }
         if (!$this->hasFleetSlotsAvailable()) {
             return false;
         }
@@ -1412,6 +1444,10 @@ class BotService
             $this->logAction(BotActionType::ATTACK, 'No fleet slots available', [], 'failed');
             return false;
         }
+        if ($this->isUnderThreat()) {
+            $this->logAction(BotActionType::ATTACK, 'Under threat, prioritizing defense', [], 'failed');
+            return false;
+        }
 
         try {
             $source = $this->getRichestPlanet();
@@ -1450,6 +1486,23 @@ class BotService
             if ($target === null) {
                 $this->logAction(BotActionType::ATTACK, 'No suitable target found', [], 'failed');
                 return false;
+            }
+
+            if (!$this->hasRecentEspionageReport($target)) {
+                if ($this->sendEspionageProbe($target)) {
+                    $this->bot->updateLastAction();
+                    return true;
+                }
+            }
+
+            if ($report = $this->getLatestEspionageReport($target)) {
+                $reportPower = $this->calculateReportDefensePower($report);
+                if ($reportPower > 0 && $reportPower > $this->calculateFleetPower($source) * 1.2) {
+                    $this->logAction(BotActionType::ATTACK, 'Espionage report indicates target too strong', [
+                        'report_power' => $reportPower,
+                    ], 'failed');
+                    return false;
+                }
             }
 
             // Build attack fleet based on target
@@ -1649,6 +1702,92 @@ class BotService
         }
 
         return $candidate;
+    }
+
+    private function hasRecentEspionageReport(PlanetService $target): bool
+    {
+        $report = $this->getLatestEspionageReport($target);
+        if (!$report) {
+            return false;
+        }
+
+        return $report->created_at && $report->created_at->diffInMinutes(now()) < 20;
+    }
+
+    private function getLatestEspionageReport(PlanetService $target): ?EspionageReport
+    {
+        $coords = $target->getPlanetCoordinates();
+        return EspionageReport::where('planet_galaxy', $coords->galaxy)
+            ->where('planet_system', $coords->system)
+            ->where('planet_position', $coords->position)
+            ->where('planet_type', $target->getPlanetType()->value)
+            ->latest()
+            ->first();
+    }
+
+    private function calculateReportDefensePower(EspionageReport $report): int
+    {
+        $total = 0;
+        $ships = $report->ships ?? [];
+        $defense = $report->defense ?? [];
+
+        foreach ($ships as $machine => $amount) {
+            $total += $this->getUnitPoints($machine) * (int) $amount;
+        }
+        foreach ($defense as $machine => $amount) {
+            $total += $this->getUnitPoints($machine) * (int) $amount;
+        }
+
+        return $total;
+    }
+
+    public function sendEspionageProbe(PlanetService $target): bool
+    {
+        try {
+            if (!$this->hasFleetSlotsAvailable()) {
+                return false;
+            }
+
+            $source = $this->getRichestPlanet();
+            if ($source === null) {
+                return false;
+            }
+
+            $probesAvailable = $source->getObjectAmount('espionage_probe');
+            if ($probesAvailable < 1) {
+                return false;
+            }
+
+            $probeCount = min(5, $probesAvailable);
+            $fleet = new \OGame\GameObjects\Models\Units\UnitCollection();
+            $fleet->addUnit(ObjectService::getUnitObjectByMachineName('espionage_probe'), $probeCount);
+
+            $fleetMissionService = app(FleetMissionService::class);
+            $targetCoords = $target->getPlanetCoordinates();
+            $consumption = $fleetMissionService->calculateConsumption($source, $fleet, $targetCoords, 6, 100);
+            if ($source->getResources()->deuterium->get() < $consumption) {
+                return false;
+            }
+
+            $fleetMissionService->createNewFromPlanet(
+                $source,
+                $targetCoords,
+                \OGame\Models\Enums\PlanetType::Planet,
+                6,
+                $fleet,
+                new Resources(0, 0, 0, 0),
+                100,
+                0
+            );
+
+            $this->logAction(BotActionType::ATTACK, "Sent espionage probes ({$probeCount}) to {$targetCoords->asString()}", [
+                'consumption' => $consumption,
+            ]);
+
+            return true;
+        } catch (Exception) {
+            return false;
+        }
     }
 
     /**

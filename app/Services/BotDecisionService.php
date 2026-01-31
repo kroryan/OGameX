@@ -201,12 +201,18 @@ class BotDecisionService
                         $modifier = 1.5; // Urgent to spend
                     }
                 }
+                if (!empty($state['is_under_threat'])) {
+                    $modifier *= 1.2;
+                }
                 break;
 
             case 'fleet':
                 // If already have significant fleet, reduce priority
                 if ($state['fleet_points'] > 200000) {
                     $modifier = 0.7;
+                }
+                if (!empty($state['is_under_threat'])) {
+                    $modifier *= 1.4;
                 }
                 break;
 
@@ -218,6 +224,9 @@ class BotDecisionService
                 // Reduce if resources are low (need to rebuild)
                 if ($totalResources < 100000) {
                     $modifier = 0.5;
+                }
+                if (!empty($state['is_under_threat'])) {
+                    $modifier *= 0.6;
                 }
                 break;
 

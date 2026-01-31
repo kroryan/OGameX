@@ -4,6 +4,8 @@
 
 </div>
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/kroryan/OGameX)
+
+
 <p align="center"><img align="center" src="https://github.com/lanedirt/OGameX/assets/6917405/c81061d5-0310-4574-a91d-1ea155b567c0" alt="OGameX logo" /></p>
 
 <p align="center">

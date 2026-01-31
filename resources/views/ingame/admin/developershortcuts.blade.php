@@ -105,6 +105,77 @@
                                         <input type="submit" class="btn_blue" name="reset_resources" value="@lang('Set all resources to 0')">
                                     </div>
                                 </div>
+
+                                <p class="box_highlight textCenter no_buddies">@lang('Quick resources (current planet)')</p>
+                                <div class="group bborder" style="display: block;">
+                                    <div class="fieldwrapper">
+                                        <div class="smallFont">@lang('Use positive or negative values. Supports k/m/b suffixes (e.g., 1k, 2m, 3b).')</div>
+                                        <div class="thefield" style="display: flex; flex-direction: column; gap: 10px;">
+                                            <div style="display: flex; gap: 10px;">
+                                                <label for="current_metal" style="min-width: 80px;">@lang('Metal:')</label>
+                                                <input type="text" id="current_metal" pattern="^[-+0-9,.kmb]+$"
+                                                       class="textInput w100 textCenter textBeefy"
+                                                       placeholder="0" name="current_metal">
+                                            </div>
+                                            <div style="display: flex; gap: 10px;">
+                                                <label for="current_crystal" style="min-width: 80px;">@lang('Crystal:')</label>
+                                                <input type="text" id="current_crystal" pattern="^[-+0-9,.kmb]+$"
+                                                       class="textInput w100 textCenter textBeefy"
+                                                       placeholder="0" name="current_crystal">
+                                            </div>
+                                            <div style="display: flex; gap: 10px;">
+                                                <label for="current_deuterium" style="min-width: 80px;">@lang('Deuterium:')</label>
+                                                <input type="text" id="current_deuterium" pattern="^[-+0-9,.kmb]+$"
+                                                       class="textInput w100 textCenter textBeefy"
+                                                       placeholder="0" name="current_deuterium">
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="fieldwrapper" style="text-align: center;">
+                                        <input type="submit" class="btn_blue" name="update_current_resources" value="@lang('Update Current Planet Resources')">
+                                    </div>
+                                </div>
+
+                                <p class="box_highlight textCenter no_buddies">@lang('Quick resources (all planets)')</p>
+                                <div class="group bborder" style="display: block;">
+                                    <div class="fieldwrapper">
+                                        <div class="smallFont">@lang('Applies to all your planets. Use positive or negative values. Supports k/m/b suffixes.')</div>
+                                        <div class="thefield" style="display: flex; flex-direction: column; gap: 10px;">
+                                            <div style="display: flex; gap: 10px;">
+                                                <label for="all_metal" style="min-width: 80px;">@lang('Metal:')</label>
+                                                <input type="text" id="all_metal" pattern="^[-+0-9,.kmb]+$"
+                                                       class="textInput w100 textCenter textBeefy"
+                                                       placeholder="0" name="all_metal">
+                                            </div>
+                                            <div style="display: flex; gap: 10px;">
+                                                <label for="all_crystal" style="min-width: 80px;">@lang('Crystal:')</label>
+                                                <input type="text" id="all_crystal" pattern="^[-+0-9,.kmb]+$"
+                                                       class="textInput w100 textCenter textBeefy"
+                                                       placeholder="0" name="all_crystal">
+                                            </div>
+                                            <div style="display: flex; gap: 10px;">
+                                                <label for="all_deuterium" style="min-width: 80px;">@lang('Deuterium:')</label>
+                                                <input type="text" id="all_deuterium" pattern="^[-+0-9,.kmb]+$"
+                                                       class="textInput w100 textCenter textBeefy"
+                                                       placeholder="0" name="all_deuterium">
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="fieldwrapper" style="text-align: center;">
+                                        <input type="submit" class="btn_blue" name="update_all_planets_resources" value="@lang('Update All Planets Resources')">
+                                    </div>
+                                </div>
+
+                                <p class="box_highlight textCenter no_buddies">@lang('Queues')</p>
+                                <div class="group bborder" style="display: block;">
+                                    <div class="fieldwrapper">
+                                        <div class="smallFont">@lang('Finish instantly applies queued buildings/units/research immediately for the current planet and player.')</div>
+                                    </div>
+                                    <div class="fieldwrapper" style="text-align: center;">
+                                        <input type="submit" class="btn_blue" name="finish_current_queues" value="@lang('Finish Queues Instantly')">
+                                        <input type="submit" class="btn_blue" name="clear_current_queues" value="@lang('Clear Queues')">
+                                    </div>
+                                </div>
                             </form>
 
                             <form action="{{ route('admin.developershortcuts.update-resources') }}" name="form" method="post">

@@ -10,8 +10,11 @@ use OGame\Facades\AppUtil;
 use OGame\Factories\PlanetServiceFactory;
 use OGame\GameConstants\UniverseConstants;
 use OGame\Http\Controllers\OGameController;
+use OGame\Models\BuildingQueue;
 use OGame\Models\Planet\Coordinate;
+use OGame\Models\ResearchQueue;
 use OGame\Models\Resources;
+use OGame\Models\UnitQueue;
 use OGame\Services\DarkMatterService;
 use OGame\Services\DebrisFieldService;
 use OGame\Services\ObjectService;
@@ -111,6 +114,134 @@ class DeveloperShortcutsController extends OGameController
             $playerService->planets->current()->deductResources($playerService->planets->current()->getResources());
 
             return redirect()->back()->with('success', 'All resources have been set to 0');
+        } elseif ($request->has('update_current_resources')) {
+            $metal = AppUtil::parseResourceValue($request->input('current_metal', 0));
+            $crystal = AppUtil::parseResourceValue($request->input('current_crystal', 0));
+            $deuterium = AppUtil::parseResourceValue($request->input('current_deuterium', 0));
+
+            $resourcesToAdd = new Resources(
+                metal: max(0, $metal),
+                crystal: max(0, $crystal),
+                deuterium: max(0, $deuterium),
+                energy: 0
+            );
+
+            $resourcesToDeduct = new Resources(
+                metal: abs(min(0, $metal)),
+                crystal: abs(min(0, $crystal)),
+                deuterium: abs(min(0, $deuterium)),
+                energy: 0
+            );
+
+            $planet = $playerService->planets->current();
+            if ($resourcesToDeduct->sum() > 0) {
+                $planet->deductResources($resourcesToDeduct);
+            }
+            if ($resourcesToAdd->sum() > 0) {
+                $planet->addResources($resourcesToAdd);
+            }
+
+            return redirect()->back()->with('success', 'Current planet resources updated.');
+        } elseif ($request->has('update_all_planets_resources')) {
+            $metal = AppUtil::parseResourceValue($request->input('all_metal', 0));
+            $crystal = AppUtil::parseResourceValue($request->input('all_crystal', 0));
+            $deuterium = AppUtil::parseResourceValue($request->input('all_deuterium', 0));
+
+            $resourcesToAdd = new Resources(
+                metal: max(0, $metal),
+                crystal: max(0, $crystal),
+                deuterium: max(0, $deuterium),
+                energy: 0
+            );
+
+            $resourcesToDeduct = new Resources(
+                metal: abs(min(0, $metal)),
+                crystal: abs(min(0, $crystal)),
+                deuterium: abs(min(0, $deuterium)),
+                energy: 0
+            );
+
+            foreach ($playerService->planets->all() as $planet) {
+                if ($resourcesToDeduct->sum() > 0) {
+                    $planet->deductResources($resourcesToDeduct);
+                }
+                if ($resourcesToAdd->sum() > 0) {
+                    $planet->addResources($resourcesToAdd);
+                }
+            }
+
+            return redirect()->back()->with('success', 'All planets resources updated.');
+        } elseif ($request->has('finish_current_queues')) {
+            $planet = $playerService->planets->current();
+
+            $buildingQueue = BuildingQueue::where('planet_id', $planet->getPlanetId())
+                ->where('processed', 0)
+                ->where('canceled', 0)
+                ->orderBy('id')
+                ->get();
+            foreach ($buildingQueue as $item) {
+                $planet->setObjectLevel($item->object_id, $item->object_level_target, false);
+                $item->processed = 1;
+                $item->save();
+            }
+            if ($buildingQueue->isNotEmpty()) {
+                $planet->updateResourceProductionStats(false);
+                $planet->updateResourceStorageStats(false);
+                $planet->save();
+            }
+
+            $unitQueue = UnitQueue::where('planet_id', $planet->getPlanetId())
+                ->where('processed', 0)
+                ->where('canceled', 0)
+                ->orderBy('id')
+                ->get();
+            foreach ($unitQueue as $item) {
+                $remaining = max(0, $item->object_amount - $item->object_amount_progress);
+                if ($remaining > 0) {
+                    $object = ObjectService::getUnitObjectById($item->object_id);
+                    $planet->addUnit($object->machine_name, $remaining, false);
+                }
+                $item->object_amount_progress = $item->object_amount;
+                $item->time_progress = $item->time_end;
+                $item->processed = 1;
+                $item->save();
+            }
+            if ($unitQueue->isNotEmpty()) {
+                $planet->save();
+            }
+
+            $planetIds = $playerService->planets->allIds();
+            $researchQueue = ResearchQueue::whereIn('planet_id', $planetIds)
+                ->where('processed', 0)
+                ->where('canceled', 0)
+                ->orderBy('id')
+                ->get();
+            foreach ($researchQueue as $item) {
+                $object = ObjectService::getResearchObjectById($item->object_id);
+                $playerService->setResearchLevel($object->machine_name, $item->object_level_target);
+                $item->processed = 1;
+                $item->save();
+            }
+
+            return redirect()->back()->with('success', 'Queues finished instantly for current planet and player research.');
+        } elseif ($request->has('clear_current_queues')) {
+            $planet = $playerService->planets->current();
+            BuildingQueue::where('planet_id', $planet->getPlanetId())
+                ->where('processed', 0)
+                ->where('canceled', 0)
+                ->delete();
+            UnitQueue::where('planet_id', $planet->getPlanetId())
+                ->where('processed', 0)
+                ->where('canceled', 0)
+                ->delete();
+
+            $planetIds = $playerService->planets->allIds();
+            ResearchQueue::whereIn('planet_id', $planetIds)
+                ->where('processed', 0)
+                ->where('canceled', 0)
+                ->delete();
+
+            return redirect()->back()->with('success', 'Queues cleared for current planet and player research.');
         }
 
         // Handle unit submission

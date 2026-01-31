@@ -40,6 +40,8 @@
                                         <option value="players" {{ ($locateType ?? 'all') === 'players' ? 'selected' : '' }}>@lang('Players')</option>
                                         <option value="bots" {{ ($locateType ?? 'all') === 'bots' ? 'selected' : '' }}>@lang('Bots')</option>
                                     </select>
+                                    <label class="styled textBeefy">@lang('Show all:')</label>
+                                    <input type="checkbox" name="locate_show_all" {{ !empty($locateShowAll) ? 'checked' : '' }}>
                                     <label class="styled textBeefy">@lang('Limit:')</label>
                                     <input type="text" pattern="^[0-9]+$" class="textInput w50 textCenter textBeefy"
                                            name="locate_limit" value="{{ $locateLimit ?? 200 }}">

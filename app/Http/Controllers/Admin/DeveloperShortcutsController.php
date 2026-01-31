@@ -38,6 +38,7 @@ class DeveloperShortcutsController extends OGameController
         $locateType = (string)$request->input('locate_type', 'all');
         $locateLimit = (int)$request->input('locate_limit', 200);
         $locateLimit = max(1, min(2000, $locateLimit));
+        $locateShowAll = $request->boolean('locate_show_all');
 
         if ($request->has('locate_submit')) {
             $planetsQuery = Planet::query()
@@ -51,8 +52,11 @@ class DeveloperShortcutsController extends OGameController
                 $planetsQuery->whereNull('bots.id');
             }
 
-            if ($locateQuery !== '') {
-                $planetsQuery->where('users.username', 'like', '%' . $locateQuery . '%');
+            if (!$locateShowAll && $locateQuery !== '') {
+                $planetsQuery->where(function ($query) use ($locateQuery) {
+                    $query->where('users.username', 'like', '%' . $locateQuery . '%')
+                        ->orWhere('bots.name', 'like', '%' . $locateQuery . '%');
+                });
             }
 
             $locateResults = $planetsQuery
@@ -84,6 +88,7 @@ class DeveloperShortcutsController extends OGameController
             'locateQuery' => $locateQuery,
             'locateType' => $locateType,
             'locateLimit' => $locateLimit,
+            'locateShowAll' => $locateShowAll,
         ]);
     }
 

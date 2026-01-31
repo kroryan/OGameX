@@ -309,7 +309,7 @@
                         <div class="bot-config-section">
                             <h3>⏰ Activity Schedule</h3>
                             <div class="info-box">
-                                Define when the bot should be active. Leave empty to be active 24/7.
+                                Define when the bot should be active. If empty, the default cycle applies (active 20 minutes every 4 hours).
                             </div>
 
                             <div class="config-row">
@@ -317,7 +317,7 @@
                                 <div class="config-field">
                                     <div class="hours-grid">
                                         @for ($hour = 0; $hour < 24; $hour++)
-                                            $checked = in_array($hour, $activeHours) ? 'checked' : '';
+                                            @php $checked = in_array($hour, $activeHours) ? 'checked' : ''; @endphp
                                             <input type="checkbox" class="hour-checkbox" name="active_hours[]" value="{{ $hour }}" id="hour_{{ $hour }}" {{ $checked }}>
                                             <label for="hour_{{ $hour }}" class="hour-label">{{ $hour }}</label>
                                         @endfor
@@ -332,7 +332,7 @@
                                 <div class="config-label">Inactive Days:</div>
                                 <div class="config-field">
                                     @foreach (['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'] as $day)
-                                        $checked = in_array($day, $inactiveDays) ? 'checked' : '';
+                                        @php $checked = in_array($day, $inactiveDays) ? 'checked' : ''; @endphp
                                         <input type="checkbox" class="day-checkbox" name="inactive_days[]" value="{{ $day }}" id="day_{{ $day }}" {{ $checked }}>
                                         <label for="day_{{ $day }}" class="day-label">{{ ucfirst($day) }}</label>
                                     @endforeach
@@ -619,5 +619,4 @@
         });
     </script>
 
-    @include('ingame.components.footer')
 @endsection

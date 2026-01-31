@@ -241,6 +241,7 @@ Route::middleware(['auth', 'globalgame', 'locale', 'admin'])->group(function () 
     Route::get('/admin/bots', [BotManagementController::class, 'index'])->name('admin.bots.index');
     Route::get('/admin/bots/create', [BotManagementController::class, 'create'])->name('admin.bots.create');
     Route::post('/admin/bots', [BotManagementController::class, 'store'])->name('admin.bots.store');
+    Route::post('/admin/bots/bulk', [BotManagementController::class, 'bulkStore'])->name('admin.bots.bulk-store');
     Route::get('/admin/bots/{botId}/edit', [BotManagementController::class, 'edit'])->name('admin.bots.edit');
     Route::put('/admin/bots/{botId}', [BotManagementController::class, 'update'])->name('admin.bots.update');
     Route::delete('/admin/bots/{botId}', [BotManagementController::class, 'delete'])->name('admin.bots.delete');

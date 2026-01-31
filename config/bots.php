@@ -30,6 +30,11 @@ return [
     'max_building_level' => 30,
     'max_research_level' => 10,
 
+    // Default activity cycle when no schedule is defined
+    // Bots are active for 20 minutes every 4 hours by default.
+    'default_activity_cycle_minutes' => 240,
+    'default_activity_window_minutes' => 20,
+
     // Maximum percentage of units to send in an attack (bot keeps rest for defense)
     'attack_fleet_percentage' => [
         'aggressive' => 0.9,

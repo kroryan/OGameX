@@ -24,6 +24,8 @@ class GameStateAnalyzer
     {
         $player = $botService->getPlayer();
         $planets = $player->planets->all();
+        $economy = $botService->getBot()->getEconomySettings();
+        $minResources = (int) ($economy['min_resources_for_actions'] ?? 10000);
 
         // Calculate total points
         $totalPoints = 0;
@@ -85,6 +87,10 @@ class GameStateAnalyzer
 
         $researchPoints = $this->calculateResearchPoints($player);
         $totalPoints = $buildingPoints + $fleetPoints + $researchPoints + $defensePoints;
+        $totalResourceSum = $totalResources['metal'] + $totalResources['crystal'] + $totalResources['deuterium'];
+        $canAffordBuilding = $botService->canAffordAnyBuilding();
+        $canAffordResearch = $botService->canAffordAnyResearch();
+        $canAffordUnit = $botService->canAffordAnyUnit();
 
         return [
             'total_points' => $totalPoints,
@@ -93,11 +99,14 @@ class GameStateAnalyzer
             'research_points' => $researchPoints,
             'defense_points' => $defensePoints,
             'total_resources' => $totalResources,
+            'total_resources_sum' => $totalResourceSum,
             'total_production' => $totalProduction,
             'planet_count' => count($planets),
             'game_phase' => $this->determineGamePhase($totalPoints),
-            'can_afford_fleet' => $totalResources['metal'] > 100000 && $totalResources['crystal'] > 50000,
-            'can_afford_research' => $totalResources['metal'] > 50000 && $totalResources['crystal'] > 25000,
+            'min_resources_for_actions' => $minResources,
+            'can_afford_build' => $canAffordBuilding,
+            'can_afford_fleet' => $canAffordUnit && $totalResourceSum >= $minResources,
+            'can_afford_research' => $canAffordResearch,
             'has_significant_fleet' => $fleetPoints > 50000,
             'is_under_threat' => false, // Would implement threat detection
             // Queue status
@@ -245,13 +254,13 @@ class GameStateAnalyzer
             'light_fighter' => 4,
             'heavy_fighter' => 10,
             'cruiser' => 29,
-            'battleship' => 60,
+            'battle_ship' => 60,
             'battlecruiser' => 70,
             'bomber' => 90,
             'destroyer' => 125,
             'deathstar' => 10000,
-            'small_transport' => 4,
-            'large_transport' => 12,
+            'small_cargo' => 4,
+            'large_cargo' => 12,
             'colony_ship' => 40,
             'recycler' => 18,
             'espionage_probe' => 1,
@@ -296,12 +305,12 @@ class GameStateAnalyzer
     private function calculateResearchPoints(PlayerService $player): int
     {
         $techs = [
-            'espionage_technology', 'computer_technology', 'weapons_technology',
+            'espionage_technology', 'computer_technology', 'weapon_technology',
             'shielding_technology', 'armor_technology', 'energy_technology',
             'hyperspace_technology', 'combustion_drive', 'impulse_drive',
             'hyperspace_drive', 'laser_technology', 'ion_technology',
             'plasma_technology', 'intergalactic_research_network',
-            'astrophysics_technology', 'graviton_technology',
+            'astrophysics', 'graviton_technology',
         ];
 
         $points = 0;

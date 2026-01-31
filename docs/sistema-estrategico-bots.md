@@ -480,6 +480,16 @@ class BotService
 }
 ```
 
+### Ciclo de actividad por defecto
+Si un bot no tiene `activity_schedule`, se usa un ciclo por defecto:
+- Activo **20 minutos** cada **4 horas**.
+
+Esto se puede ajustar en `config/bots.php`:
+```php
+'default_activity_cycle_minutes' => 240,
+'default_activity_window_minutes' => 20,
+```
+
 ### Modificadores de Personalidad Estratégicos
 ```json
 {

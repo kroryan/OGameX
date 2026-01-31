@@ -4,18 +4,18 @@ namespace OGame\Http\Controllers\Admin;
 
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Str;
+use Illuminate\Validation\Rules\Password;
 use Illuminate\View\View;
 use OGame\Enums\BotActionType;
 use OGame\Enums\BotPersonality;
 use OGame\Enums\BotTargetType;
 use OGame\Factories\BotServiceFactory;
 use OGame\Http\Controllers\OGameController;
+use OGame\Jobs\BulkCreateBots;
 use OGame\Models\Bot;
 use OGame\Models\BotLog;
 use OGame\Models\User;
-use OGame\Services\BotDecisionService;
-use OGame\Services\BotService;
-use OGame\Services\PlayerService;
 
 /**
  * BotManagementController - Admin panel for managing playerbots.
@@ -66,6 +66,54 @@ class BotManagementController extends OGameController
             'targetTypes' => BotTargetType::cases(),
             'availableUsers' => $availableUsers,
         ]);
+    }
+
+    /**
+     * Bulk create bot accounts and assign them to new bots.
+     */
+    public function bulkStore(Request $request): RedirectResponse
+    {
+        $validated = $request->validate([
+            'count' => 'required|integer|min:1|max:300',
+            'password' => ['required', 'string', Password::default()],
+            'email_prefix' => 'nullable|string|max:50',
+            'email_domain' => 'required|string|max:100',
+            'bot_name_prefix' => 'nullable|string|max:50',
+            'personality' => 'required|in:aggressive,defensive,economic,balanced,random',
+            'priority_target_type' => 'required|in:random,weak,rich,similar,random_choice',
+            'max_fleets_sent' => 'nullable|integer|min:1|max:10',
+            'is_active' => 'nullable|boolean',
+        ]);
+
+        $count = (int) $validated['count'];
+        $emailPrefix = $this->sanitizeEmailLocalPart($validated['email_prefix'] ?? 'bot');
+        $emailDomain = strtolower(trim($validated['email_domain']));
+        $botNamePrefix = trim($validated['bot_name_prefix'] ?? 'Bot');
+        $maxFleets = $validated['max_fleets_sent'] ?? 3;
+        $isActive = array_key_exists('is_active', $validated) ? (bool) $validated['is_active'] : true;
+
+        if ($emailPrefix === '') {
+            $emailPrefix = 'bot';
+        }
+
+        $batchToken = now()->format('ymdHis') . Str::lower(Str::random(4));
+
+        BulkCreateBots::dispatch([
+            'count' => $count,
+            'password' => $validated['password'],
+            'email_prefix' => $emailPrefix,
+            'email_domain' => $emailDomain,
+            'bot_name_prefix' => $botNamePrefix,
+            'personality' => $validated['personality'],
+            'priority_target_type' => $validated['priority_target_type'],
+            'max_fleets_sent' => $maxFleets,
+            'is_active' => $isActive,
+            'batch_token' => $batchToken,
+        ]);
+
+        return redirect()
+            ->route('admin.bots.index')
+            ->with('success', "Bulk creation queued: {$count} bot account(s).");
     }
 
     /**
@@ -385,5 +433,11 @@ class BotManagementController extends OGameController
             'actionBreakdown' => $actionBreakdown,
             'bots' => $bots,
         ]);
+    }
+
+    private function sanitizeEmailLocalPart(string $value): string
+    {
+        $value = strtolower(trim($value));
+        return preg_replace('/[^a-z0-9._+-]+/', '', $value) ?? '';
     }
 }

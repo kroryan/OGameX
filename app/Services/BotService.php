@@ -78,6 +78,18 @@ class BotService
     }
 
     /**
+     * Check if bot can send another fleet mission (bot cap + player slot cap).
+     */
+    public function hasFleetSlotsAvailable(): bool
+    {
+        $botCap = $this->bot->max_fleets_sent ?? config('bots.max_fleets_per_bot', 3);
+        $playerCap = $this->player->getFleetSlotsMax();
+        $limit = min($botCap, $playerCap);
+
+        return $this->player->getFleetSlotsInUse() < $limit;
+    }
+
+    /**
      * Check if bot should skip action based on behavior flags.
      */
     public function shouldSkipAction(string $actionType): bool
@@ -194,6 +206,295 @@ class BotService
     }
 
     /**
+     * Check if bot can afford at least one building.
+     */
+    public function canAffordAnyBuilding(): bool
+    {
+        $planets = $this->player->planets->all();
+        if (empty($planets)) {
+            return false;
+        }
+
+        foreach ($planets as $planet) {
+            if ($this->isBuildingQueueFull($planet)) {
+                continue;
+            }
+
+            $budget = $this->getSpendableBudget($planet);
+            if ($budget <= 0) {
+                continue;
+            }
+
+            $buildings = ObjectService::getBuildingObjects();
+            foreach ($buildings as $building) {
+                $currentLevel = $planet->getObjectLevel($building->machine_name);
+                if ($currentLevel >= config('bots.max_building_level', 30)) {
+                    continue;
+                }
+
+                if (!ObjectService::objectRequirementsMet($building->machine_name, $planet)) {
+                    continue;
+                }
+
+                $price = ObjectService::getObjectPrice($building->machine_name, $planet);
+                $cost = $price->metal->get() + $price->crystal->get() + $price->deuterium->get();
+                if ($cost <= $budget) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Check if bot can afford at least one research.
+     */
+    public function canAffordAnyResearch(): bool
+    {
+        $planets = $this->player->planets->all();
+        if (empty($planets)) {
+            return false;
+        }
+
+        foreach ($planets as $planet) {
+            if ($this->isResearchQueueFull($planet)) {
+                continue;
+            }
+
+            if ($planet->getObjectLevel('research_lab') < 1) {
+                continue;
+            }
+
+            $budget = $this->getSpendableBudget($planet);
+            if ($budget <= 0) {
+                continue;
+            }
+
+            $research = ObjectService::getResearchObjects();
+            foreach ($research as $tech) {
+                $currentLevel = $this->player->getResearchLevel($tech->machine_name);
+                if ($currentLevel >= config('bots.max_research_level', 10)) {
+                    continue;
+                }
+
+                if (!ObjectService::objectRequirementsMet($tech->machine_name, $planet)) {
+                    continue;
+                }
+
+                $price = ObjectService::getObjectPrice($tech->machine_name, $planet);
+                $cost = $price->metal->get() + $price->crystal->get() + $price->deuterium->get();
+                if ($cost <= $budget) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Check if bot can afford at least one unit.
+     */
+    public function canAffordAnyUnit(): bool
+    {
+        $planets = $this->player->planets->all();
+        if (empty($planets)) {
+            return false;
+        }
+
+        foreach ($planets as $planet) {
+            if ($this->isUnitQueueFull($planet)) {
+                continue;
+            }
+
+            $budget = $this->getSpendableBudget($planet);
+            if ($budget <= 0) {
+                continue;
+            }
+
+            $units = ObjectService::getUnitObjects();
+            foreach ($units as $unit) {
+                if (!$this->shouldConsiderUnitForPersonality($unit->machine_name)) {
+                    continue;
+                }
+
+                if (!ObjectService::objectRequirementsMet($unit->machine_name, $planet)) {
+                    continue;
+                }
+
+                $price = ObjectService::getObjectPrice($unit->machine_name, $planet);
+                $cost = $price->metal->get() + $price->crystal->get() + $price->deuterium->get();
+                if ($cost <= $budget) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private function getSpendableBudget(PlanetService $planet): float
+    {
+        $economy = $this->bot->getEconomySettings();
+        $resources = $planet->getResources();
+        $total = $resources->metal->get() + $resources->crystal->get() + $resources->deuterium->get();
+        $reserve = (float) ($economy['save_for_upgrade_percent'] ?? 0.3);
+
+        return $total * max(0, 1 - $reserve);
+    }
+
+    private function shouldConsiderUnitForPersonality(string $machineName): bool
+    {
+        if ($machineName === 'colony_ship' && $this->shouldColonize()) {
+            return true;
+        }
+
+        if ($this->getPersonality() === BotPersonality::AGGRESSIVE) {
+            if (in_array($machineName, ['colony_ship', 'recycler', 'solar_satellite', 'crawler'])) {
+                return false;
+            }
+        } elseif ($this->getPersonality() === BotPersonality::ECONOMIC) {
+            if (in_array($machineName, ['colony_ship', 'recycler'])) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    public function shouldColonize(): bool
+    {
+        $maxPlanets = $this->player->getMaxPlanetAmount();
+        $behavior = $this->bot->behavior_flags ?? [];
+        if (!empty($behavior['max_planets_to_colonize'])) {
+            $maxPlanets = min($maxPlanets, (int) $behavior['max_planets_to_colonize']);
+        }
+
+        return count($this->player->planets->all()) < $maxPlanets;
+    }
+
+    public function sendColonization(): bool
+    {
+        if (!$this->shouldColonize()) {
+            return false;
+        }
+        if (!$this->hasFleetSlotsAvailable()) {
+            $this->logAction(BotActionType::FLEET, 'No fleet slots available for colonization', [], 'failed');
+            return false;
+        }
+
+        $source = $this->getRichestPlanet();
+        if ($source === null) {
+            $this->logAction(BotActionType::FLEET, 'No source planet available for colonization', [], 'failed');
+            return false;
+        }
+
+        $colonyShips = $source->getObjectAmount('colony_ship');
+        if ($colonyShips < 1) {
+            $this->logAction(BotActionType::FLEET, 'No colony ship available', [], 'failed');
+            return false;
+        }
+
+        $targetCoords = $this->findColonizationTarget($source);
+        if ($targetCoords === null) {
+            $this->logAction(BotActionType::FLEET, 'No colonization target found', [], 'failed');
+            return false;
+        }
+
+        $fleet = new \OGame\GameObjects\Models\Units\UnitCollection();
+        $fleet->addUnit(ObjectService::getUnitObjectByMachineName('colony_ship'), 1);
+
+        $availableSmall = $source->getObjectAmount('small_cargo');
+        $availableLarge = $source->getObjectAmount('large_cargo');
+        if ($availableLarge > 0) {
+            $fleet->addUnit(ObjectService::getUnitObjectByMachineName('large_cargo'), min(5, $availableLarge));
+        } elseif ($availableSmall > 0) {
+            $fleet->addUnit(ObjectService::getUnitObjectByMachineName('small_cargo'), min(10, $availableSmall));
+        }
+
+        $fleetMissionService = app(FleetMissionService::class);
+        $consumption = $fleetMissionService->calculateConsumption($source, $fleet, $targetCoords, 7, 100);
+        if ($source->getResources()->deuterium->get() < $consumption) {
+            $this->logAction(BotActionType::FLEET, 'Not enough deuterium for colonization', [
+                'required' => $consumption,
+                'available' => $source->getResources()->deuterium->get(),
+            ], 'failed');
+            return false;
+        }
+
+        $resourcesToSend = new Resources(0, 0, 0, 0);
+        $cargoCapacity = $fleet->getTotalCargoCapacity($this->player);
+        if ($cargoCapacity > 0) {
+            $available = $source->getResources();
+            $sendTotal = min((int)($cargoCapacity * 0.7), (int)($available->metal->get() + $available->crystal->get() + $available->deuterium->get()));
+            if ($sendTotal > 0) {
+                $split = (int)($sendTotal / 3);
+                $resourcesToSend = new Resources($split, $split, $sendTotal - ($split * 2), 0);
+            }
+        }
+
+        $fleetMissionService->createNewFromPlanet(
+            $source,
+            $targetCoords,
+            \OGame\Models\Enums\PlanetType::Planet,
+            7,
+            $fleet,
+            $resourcesToSend,
+            100,
+            0
+        );
+
+        $this->logAction(BotActionType::FLEET, "Sent colonization to {$targetCoords->asString()}", [
+            'consumption' => $consumption,
+            'resources' => [
+                'metal' => $resourcesToSend->metal->get(),
+                'crystal' => $resourcesToSend->crystal->get(),
+                'deuterium' => $resourcesToSend->deuterium->get(),
+            ],
+        ]);
+
+        $this->bot->updateLastAction();
+        return true;
+    }
+
+    private function findColonizationTarget(PlanetService $source): ?\OGame\Models\Planet\Coordinate
+    {
+        $coords = $source->getPlanetCoordinates();
+        $galaxy = $coords->galaxy;
+        $maxSystems = \OGame\GameConstants\UniverseConstants::MAX_SYSTEM_COUNT;
+
+        $attempts = 0;
+        while ($attempts < 40) {
+            $systemOffset = rand(-50, 50);
+            $system = $coords->system + $systemOffset;
+            if ($system < 1 || $system > $maxSystems) {
+                $system = rand(1, $maxSystems);
+            }
+
+            $position = rand(4, 12);
+            if (!$this->player->canColonizePosition($position)) {
+                $attempts++;
+                continue;
+            }
+
+            $exists = Planet::where('galaxy', $galaxy)
+                ->where('system', $system)
+                ->where('planet', $position)
+                ->where('destroyed', 0)
+                ->exists();
+
+            if (!$exists) {
+                return new \OGame\Models\Planet\Coordinate($galaxy, $system, $position);
+            }
+
+            $attempts++;
+        }
+
+        return null;
+    }
+
+    /**
      * Log an action for this bot.
      */
     public function logAction(BotActionType $action, string $description, array $resourcesSpent = [], string $result = 'success'): void
@@ -284,12 +585,6 @@ class BotService
                 return false;
             }
 
-            // Check minimum resources
-            if (!$this->hasMinimumResources()) {
-                $this->logAction(BotActionType::BUILD, 'Insufficient resources for building', [], 'failed');
-                return false;
-            }
-
             // Get buildable buildings with smart prioritization
             $buildings = ObjectService::getBuildingObjects();
             $affordableBuildings = [];
@@ -298,7 +593,7 @@ class BotService
                 $currentLevel = $planet->getObjectLevel($building->machine_name);
 
                 // Skip very high levels
-                if ($currentLevel >= 30) {
+                if ($currentLevel >= config('bots.max_building_level', 30)) {
                     continue;
                 }
 
@@ -366,6 +661,8 @@ class BotService
     {
         $economy = $this->bot->getEconomySettings();
         $personality = $this->bot->getPersonality();
+        $price = ObjectService::getObjectPrice($machineName, $planet);
+        $cost = $price->metal->get() + $price->crystal->get() + $price->deuterium->get();
 
         // Get game phase
         $analyzer = new \OGame\Services\GameStateAnalyzer();
@@ -497,14 +794,45 @@ class BotService
             }
         }
 
+        // ROI: prefer upgrades with fast payback
+        $productionGain = $this->estimateProductionGain($machineName, $planet, $currentLevel);
+        if ($productionGain > 0 && $cost > 0) {
+            $dailyGain = $productionGain * 24;
+            $roiScore = (int)min(40, ($dailyGain / $cost) * 200);
+            $base += $roiScore;
+        }
+
         return max(10, min(200, $base));
     }
 
-        // Level curve: prioritize lower levels for faster growth
-        $levelModifier = max(0, 25 - $currentLevel);
+    private function estimateProductionGain(string $machineName, PlanetService $planet, int $currentLevel): int
+    {
+        $levelNow = $currentLevel;
+        $levelNext = $currentLevel + 1;
 
-        // Balance: don't over-specialize too much
-        return $base + $levelModifier;
+        return match ($machineName) {
+            'metal_mine' => $this->estimateMineProduction('metal_mine', $levelNext)
+                - $this->estimateMineProduction('metal_mine', $levelNow),
+            'crystal_mine' => $this->estimateMineProduction('crystal_mine', $levelNext)
+                - $this->estimateMineProduction('crystal_mine', $levelNow),
+            'deuterium_synthesizer' => $this->estimateMineProduction('deuterium_synthesizer', $levelNext)
+                - $this->estimateMineProduction('deuterium_synthesizer', $levelNow),
+            default => 0,
+        };
+    }
+
+    private function estimateMineProduction(string $machineName, int $level): int
+    {
+        if ($level <= 0) {
+            return 0;
+        }
+
+        return match ($machineName) {
+            'metal_mine' => (int)(30 * $level * pow(1.1, $level)),
+            'crystal_mine' => (int)(20 * $level * pow(1.1, $level)),
+            'deuterium_synthesizer' => (int)(10 * $level * pow(1.1, $level) * 0.7),
+            default => 0,
+        };
     }
 
     /**
@@ -513,14 +841,9 @@ class BotService
     public function buildRandomUnit(): bool
     {
         try {
-            $planet = $this->getLowestStoragePlanet();
+            $planet = $this->findPlanetForUnitBuild();
             if ($planet === null) {
                 $this->logAction(BotActionType::FLEET, 'No planets available', [], 'failed');
-                return false;
-            }
-
-            if (!$this->hasMinimumResources()) {
-                $this->logAction(BotActionType::FLEET, 'Insufficient resources', [], 'failed');
                 return false;
             }
 
@@ -532,15 +855,8 @@ class BotService
             $affordableUnits = [];
 
             foreach ($units as $unit) {
-                // Skip units based on personality
-                if ($this->getPersonality() === BotPersonality::AGGRESSIVE) {
-                    if (in_array($unit->machine_name, ['colony_ship', 'recycler', 'solar_satellite', 'crawler'])) {
-                        continue;
-                    }
-                } elseif ($this->getPersonality() === BotPersonality::ECONOMIC) {
-                    if (in_array($unit->machine_name, ['colony_ship', 'recycler'])) {
-                        continue;
-                    }
+                if (!$this->shouldConsiderUnitForPersonality($unit->machine_name)) {
+                    continue;
                 }
 
                 if (!ObjectService::objectRequirementsMet($unit->machine_name, $planet)) {
@@ -605,6 +921,75 @@ class BotService
         }
     }
 
+    private function findPlanetForUnitBuild(): ?PlanetService
+    {
+        $planets = $this->player->planets->all();
+        if (empty($planets)) {
+            return null;
+        }
+
+        $bestPlanet = null;
+        $bestBudget = 0.0;
+        foreach ($planets as $planet) {
+            if ($this->isUnitQueueFull($planet)) {
+                continue;
+            }
+
+            $budget = $this->getSpendableBudget($planet);
+            if ($budget <= 0) {
+                continue;
+            }
+
+            if (!$this->hasAffordableUnitOnPlanet($planet, $budget)) {
+                continue;
+            }
+
+            if ($budget > $bestBudget) {
+                $bestBudget = $budget;
+                $bestPlanet = $planet;
+            }
+        }
+
+        return $bestPlanet;
+    }
+
+    private function hasAffordableUnitOnPlanet(PlanetService $planet, float $budget): bool
+    {
+        $units = ObjectService::getUnitObjects();
+        $resources = $planet->getResources();
+
+        foreach ($units as $unit) {
+            if ($this->getPersonality() === BotPersonality::AGGRESSIVE) {
+                if (in_array($unit->machine_name, ['colony_ship', 'recycler', 'solar_satellite', 'crawler'])) {
+                    continue;
+                }
+            } elseif ($this->getPersonality() === BotPersonality::ECONOMIC) {
+                if (in_array($unit->machine_name, ['colony_ship', 'recycler'])) {
+                    continue;
+                }
+            }
+
+            if (!ObjectService::objectRequirementsMet($unit->machine_name, $planet)) {
+                continue;
+            }
+
+            $price = ObjectService::getObjectPrice($unit->machine_name, $planet);
+            $metalCost = $price->metal->get();
+            $crystalCost = $price->crystal->get();
+            $deuteriumCost = $price->deuterium->get();
+            $cost = $metalCost + $crystalCost + $deuteriumCost;
+
+            if ($cost <= $budget &&
+                $resources->metal->get() >= $metalCost &&
+                $resources->crystal->get() >= $crystalCost &&
+                $resources->deuterium->get() >= $deuteriumCost) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /**
      * Get unit score for bot decision making.
      */
@@ -643,6 +1028,10 @@ class BotService
             }
         }
 
+        if ($machineName === 'colony_ship' && $this->shouldColonize()) {
+            $base += 40;
+        }
+
         // Amount bonus (bulk is good)
         $amountBonus = min(20, $amount / 10);
 
@@ -679,7 +1068,7 @@ class BotService
 
             foreach ($research as $tech) {
                 $currentLevel = $this->player->getResearchLevel($tech->machine_name);
-                if ($currentLevel >= 15) {
+                if ($currentLevel >= config('bots.max_research_level', 10)) {
                     continue;
                 }
 
@@ -764,7 +1153,7 @@ class BotService
         $criticalTechs = [
             'espionage_technology',  // Needed for spying on targets
             'computer_technology',   // Needed for fleet slots
-            'astrophysics_technology', // Needed for colonization
+            'astrophysics', // Needed for colonization
             'hyperspace_technology', // Needed for battleships
         ];
 
@@ -773,7 +1162,7 @@ class BotService
             // CRITICAL: Core progression techs
             'espionage_technology' => 150,
             'computer_technology' => 145,
-            'astrophysics_technology' => 140,
+            'astrophysics' => 140,
             'hyperspace_technology' => 135,
 
             // Combat technologies
@@ -798,9 +1187,6 @@ class BotService
             'intergalactic_research_network' => 80,
             'graviton_technology' => 70,
 
-            // Colony (less important)
-            'cold_drive' => 50,
-            'intergalactic_drive' => 60,
         ];
 
         $base = $basePriorities[$machineName] ?? 70;
@@ -814,7 +1200,7 @@ class BotService
 
         // Mid game: prioritize astrophysics for colonization
         if ($phase === 'mid') {
-            if ($machineName === 'astrophysics_technology') {
+            if ($machineName === 'astrophysics') {
                 $base += 20;
             }
         }
@@ -862,6 +1248,10 @@ class BotService
             $this->logAction(BotActionType::ATTACK, 'Attack on cooldown', [], 'failed');
             return false;
         }
+        if (!$this->hasFleetSlotsAvailable()) {
+            $this->logAction(BotActionType::ATTACK, 'No fleet slots available', [], 'failed');
+            return false;
+        }
 
         try {
             $source = $this->getRichestPlanet();
@@ -906,8 +1296,20 @@ class BotService
             $fleetBuilder = app(BotFleetBuilderService::class);
             $fleet = $fleetBuilder->buildAttackFleet($this, $target);
 
-            if ($fleet->count() === 0) {
+            if ($fleet->getAmount() === 0) {
                 $this->logAction(BotActionType::ATTACK, 'No fleet available', [], 'failed');
+                return false;
+            }
+
+            $lootEstimate = $target->getResources()->metal->get()
+                + $target->getResources()->crystal->get()
+                + $target->getResources()->deuterium->get();
+            $cargoCapacity = $fleet->getTotalCargoCapacity($this->player);
+            if ($cargoCapacity <= 0 || $lootEstimate < ($cargoCapacity * 0.2)) {
+                $this->logAction(BotActionType::ATTACK, 'Target loot too low for fleet capacity', [
+                    'loot' => $lootEstimate,
+                    'capacity' => $cargoCapacity,
+                ], 'failed');
                 return false;
             }
 
@@ -920,6 +1322,14 @@ class BotService
                 $this->logAction(BotActionType::ATTACK, 'Not enough deuterium for attack', [
                     'required' => $consumption,
                     'available' => $source->getResources()->deuterium->get(),
+                ], 'failed');
+                return false;
+            }
+
+            if ($lootEstimate < ($consumption * 2)) {
+                $this->logAction(BotActionType::ATTACK, 'Attack not profitable after consumption', [
+                    'loot' => $lootEstimate,
+                    'consumption' => $consumption,
                 ], 'failed');
                 return false;
             }
@@ -950,7 +1360,7 @@ class BotService
             );
 
             $this->logAction(BotActionType::ATTACK, "Sent attack to {$targetCoords->asString()} (power: {$attackPower} vs {$targetPower})", [
-                'units' => $fleet->count(),
+                'units' => $fleet->getAmount(),
                 'consumption' => $consumption,
                 'target_player' => $target->getPlayer()->username,
             ]);
@@ -974,6 +1384,11 @@ class BotService
     public function sendExpedition(): bool
     {
         try {
+            if (!$this->hasFleetSlotsAvailable()) {
+                $this->logAction(BotActionType::FLEET, 'No fleet slots available for expedition', [], 'failed');
+                return false;
+            }
+
             $source = $this->getRichestPlanet();
             if ($source === null) {
                 $this->logAction(BotActionType::FLEET, 'No planet available for expedition', [], 'failed');
@@ -987,7 +1402,7 @@ class BotService
             $fleetBuilder = app(BotFleetBuilderService::class);
             $fleet = $fleetBuilder->buildExpeditionFleet($this, $expeditionPercentage);
 
-            if ($fleet->count() === 0) {
+            if ($fleet->getAmount() === 0) {
                 $this->logAction(BotActionType::FLEET, 'No fleet available for expedition', [], 'failed');
                 return false;
             }
@@ -1021,7 +1436,7 @@ class BotService
             );
 
             $this->logAction(BotActionType::FLEET, "Sent expedition to {$expeditionCoords->asString()}", [
-                'units' => $fleet->count(),
+                'units' => $fleet->getAmount(),
                 'consumption' => $consumption,
             ]);
 
@@ -1097,9 +1512,9 @@ class BotService
             'heavy_laser' => 4,
             'gauss_cannon' => 10,
             'ion_cannon' => 10,
-            'plasma_cannon' => 15,
-            'small_shield' => 2,
-            'large_shield' => 6,
+            'plasma_turret' => 15,
+            'small_shield_dome' => 2,
+            'large_shield_dome' => 6,
         ];
 
         foreach ($defenses as $defense => $points) {
@@ -1117,6 +1532,13 @@ class BotService
      */
     private function calculateFleetPower($fleet): int
     {
+        if ($fleet instanceof PlanetService) {
+            $fleet = $fleet->getShipUnits();
+        }
+        if (!is_object($fleet) || !property_exists($fleet, 'units')) {
+            return 0;
+        }
+
         $totalPower = 0;
         foreach ($fleet->units as $unitObj) {
             $points = $this->getUnitPoints($unitObj->unitObject->machine_name);

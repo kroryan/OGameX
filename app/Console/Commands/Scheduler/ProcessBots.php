@@ -81,6 +81,10 @@ class ProcessBots extends Command
         // Decide next action
         $decisionService = new BotDecisionService($bot);
         $action = $decisionService->decideNextAction();
+        if ($action === null) {
+            $this->line('  - Skipped: no viable actions available');
+            return;
+        }
 
         $this->line("  - Action: {$action->value}");
 
@@ -105,6 +109,12 @@ class ProcessBots extends Command
      */
     private function handleFleetAction(BotService $bot): bool
     {
+        if ($bot->shouldColonize()) {
+            if ($bot->sendColonization()) {
+                return true;
+            }
+        }
+
         // 15% chance to send expedition instead of building fleet
         if (config('bots.expedition_chance', 0.15) * 100 >= mt_rand(1, 100)) {
             return $bot->sendExpedition();

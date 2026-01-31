@@ -28,7 +28,7 @@ class BotDecisionService
     /**
      * Decide the next action for the bot using strategic decision-making.
      */
-    public function decideNextAction(): BotActionType
+    public function decideNextAction(): ?BotActionType
     {
         // Step 1: Analyze current game state
         $state = $this->stateAnalyzer->analyzeCurrentState($this->botService);
@@ -41,6 +41,9 @@ class BotDecisionService
 
         // Step 3: Get available options
         $availableActions = $this->getAvailableActions($state);
+        if (empty($availableActions)) {
+            return null;
+        }
 
         // Step 4: Score each option based on objective and state
         $scoredActions = [];
@@ -67,9 +70,11 @@ class BotDecisionService
     private function getAvailableActions(array $state): array
     {
         $actions = [];
+        $minResources = $state['min_resources_for_actions'] ?? 0;
+        $totalResources = $state['total_resources_sum'] ?? 0;
 
-        // Build is only available if we have resources AND building queues are not all full
-        if ($state['total_resources']['metal'] > 1000 && !$state['all_building_queues_full']) {
+        // Build is only available if we can afford at least one building
+        if (($state['can_afford_build'] ?? false) && !$state['all_building_queues_full']) {
             $actions[] = BotActionType::BUILD;
         }
 
@@ -84,13 +89,8 @@ class BotDecisionService
         }
 
         // Attack is only available if not on cooldown and has fleet
-        if ($this->botService->canAttack() && $state['has_significant_fleet']) {
+        if ($this->botService->canAttack() && $this->botService->hasFleetSlotsAvailable() && $state['has_significant_fleet']) {
             $actions[] = BotActionType::ATTACK;
-        }
-
-        // Ensure we always have at least one option - prefer fleet as fallback (unlimited queue)
-        if (empty($actions)) {
-            $actions[] = BotActionType::FLEET; // Will try to build fleet
         }
 
         return $actions;
@@ -258,6 +258,9 @@ class BotDecisionService
                 if ($action === BotActionType::FLEET) {
                     // Need colony ships
                     $bonus += 25;
+                    if ($this->botService->shouldColonize()) {
+                        $bonus += 25;
+                    }
                 }
                 break;
 

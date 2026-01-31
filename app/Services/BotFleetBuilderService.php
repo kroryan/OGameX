@@ -23,21 +23,22 @@ class BotFleetBuilderService
 
         // Get available units
         $availableUnits = $planet->getShipUnits();
-        if ($availableUnits->count() === 0) {
+        if ($availableUnits->getAmount() === 0) {
             return new UnitCollection();
         }
 
         $personality = $bot->getPersonality();
         $fleet = new UnitCollection();
 
-        // Fleet composition based on personality
-        // Keep some units for defense, send rest to attack
-        $attackPercentage = match ($personality) {
+        // Fleet composition based on personality or bot settings
+        $settings = $bot->getBot()->getFleetSettings();
+        $attackPercentage = $settings['attack_fleet_percentage'] ?? match ($personality) {
             BotPersonality::AGGRESSIVE => 0.9, // Send 90%
             BotPersonality::DEFENSIVE => 0.5, // Send 50%
             BotPersonality::ECONOMIC => 0.3,   // Send 30%
             BotPersonality::BALANCED => 0.7,   // Send 70%
         };
+        $attackPercentage = max(0.1, min(0.95, (float) $attackPercentage));
 
         // Prioritize combat ships
         $combatPriority = [
@@ -45,12 +46,12 @@ class BotFleetBuilderService
             'bomber' => 9,
             'destroyer' => 8,
             'battlecruiser' => 7,
-            'battleship' => 6,
+            'battle_ship' => 6,
             'cruiser' => 5,
             'heavy_fighter' => 4,
             'light_fighter' => 3,
-            'small_transporter' => 1,
-            'large_transporter' => 1,
+            'small_cargo' => 1,
+            'large_cargo' => 1,
             'colony_ship' => 0,
             'recycler' => 0,
             'espionage_probe' => 0,
@@ -78,7 +79,7 @@ class BotFleetBuilderService
         }
 
         // Add some recyclers if available (for debris)
-        $recyclers = $availableUnits->getUnitCountByMachineName('recycler');
+        $recyclers = $availableUnits->getAmountByMachineName('recycler');
         if ($recyclers > 0) {
             $sendRecyclers = max(1, (int)($recyclers * 0.2)); // Send up to 20%
             $fleet->addUnit(ObjectService::getUnitObjectByMachineName('recycler'), $sendRecyclers);
@@ -98,7 +99,7 @@ class BotFleetBuilderService
         }
 
         $availableUnits = $planet->getShipUnits();
-        if ($availableUnits->count() === 0) {
+        if ($availableUnits->getAmount() === 0) {
             return new UnitCollection();
         }
 
@@ -113,7 +114,7 @@ class BotFleetBuilderService
         $composition = $this->calculateExpeditionComposition($personality, $maxPoints);
 
         foreach ($composition as $machineName => $amount) {
-            $available = $availableUnits->getUnitCountByMachineName($machineName);
+            $available = $availableUnits->getAmountByMachineName($machineName);
             $sendAmount = min($amount, $available);
             if ($sendAmount > 0) {
                 $fleet->addUnit(ObjectService::getUnitObjectByMachineName($machineName), $sendAmount);
@@ -121,7 +122,7 @@ class BotFleetBuilderService
         }
 
         // Add espionage probes
-        $probes = $availableUnits->getUnitCountByMachineName('espionage_probe');
+        $probes = $availableUnits->getAmountByMachineName('espionage_probe');
         if ($probes > 0) {
             $sendProbes = min(10, $probes);
             $fleet->addUnit(ObjectService::getUnitObjectByMachineName('espionage_probe'), $sendProbes);
@@ -138,23 +139,23 @@ class BotFleetBuilderService
         return match ($personality) {
             BotPersonality::AGGRESSIVE => [
                 'battlecruiser' => 5,
-                'battleship' => 10,
+                'battle_ship' => 10,
                 'cruiser' => 20,
                 'light_fighter' => 50,
             ],
             BotPersonality::DEFENSIVE => [
-                'battleship' => 15,
+                'battle_ship' => 15,
                 'cruiser' => 10,
                 'heavy_fighter' => 30,
             ],
             BotPersonality::ECONOMIC => [
-                'large_transporter' => 20,
-                'small_transporter' => 50,
+                'large_cargo' => 20,
+                'small_cargo' => 50,
                 'cruiser' => 5,
                 'light_fighter' => 20,
             ],
             BotPersonality::BALANCED => [
-                'battleship' => 8,
+                'battle_ship' => 8,
                 'cruiser' => 15,
                 'heavy_fighter' => 25,
                 'light_fighter' => 40,

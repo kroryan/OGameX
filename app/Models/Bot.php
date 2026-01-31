@@ -103,9 +103,18 @@ class Bot extends Model
                     return false; // Inactive day
                 }
             }
+            return true;
         }
 
-        return true;
+        // Default activity cycle (20 minutes every 4 hours)
+        $cycleMinutes = (int) config('bots.default_activity_cycle_minutes', 240);
+        $windowMinutes = (int) config('bots.default_activity_window_minutes', 20);
+        if ($cycleMinutes <= 0 || $windowMinutes <= 0) {
+            return true;
+        }
+
+        $minutesSinceMidnight = (int) now()->format('H') * 60 + (int) now()->format('i');
+        return ($minutesSinceMidnight % $cycleMinutes) < $windowMinutes;
     }
 
     /**
@@ -169,7 +178,8 @@ class Bot extends Model
             BotPersonality::BALANCED => ['build' => 30, 'fleet' => 25, 'attack' => 20, 'research' => 25],
         };
 
-        return $this->action_probabilities ?? $personalityWeights;
+        $base = $this->action_probabilities ?? $personalityWeights;
+        return array_merge($default, $base);
     }
 
     /**
@@ -184,7 +194,7 @@ class Bot extends Model
             'prioritize_production' => 'balanced', // 'balanced', 'metal', 'crystal', 'deuterium'
         ];
 
-        return $this->economy_settings ?? $default;
+        return array_merge($default, $this->economy_settings ?? []);
     }
 
     /**
@@ -201,7 +211,7 @@ class Bot extends Model
             'max_expedition_fleet_cost_percentage' => 0.2, // Max 20% of fleet value for expeditions
         ];
 
-        return $this->fleet_settings ?? $default;
+        return array_merge($default, $this->fleet_settings ?? []);
     }
 
     /**

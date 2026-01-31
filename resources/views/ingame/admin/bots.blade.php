@@ -77,7 +77,12 @@
                                 </tr>
                                 <tr>
                                     <td>Password</td>
-                                    <td><input type="text" name="password" class="textInput w100 textBeefy" placeholder="Required for login"></td>
+                                    <td>
+                                        <input type="text" name="password" class="textInput w100 textBeefy" placeholder="Default: botpassword123">
+                                        <div style="font-size: 0.8em; color: #666; margin-top: 4px;">
+                                            Leave empty to use the default password.
+                                        </div>
+                                    </td>
                                 </tr>
                                 <tr>
                                     <td>Email Prefix</td>

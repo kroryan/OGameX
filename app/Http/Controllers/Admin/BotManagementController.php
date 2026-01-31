@@ -75,7 +75,7 @@ class BotManagementController extends OGameController
     {
         $validated = $request->validate([
             'count' => 'required|integer|min:1|max:300',
-            'password' => ['required', 'string', Password::default()],
+            'password' => ['nullable', 'string', Password::default()],
             'email_prefix' => 'nullable|string|max:50',
             'email_domain' => 'required|string|max:100',
             'bot_name_prefix' => 'nullable|string|max:50',

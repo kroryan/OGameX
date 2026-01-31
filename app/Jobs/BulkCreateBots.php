@@ -42,6 +42,11 @@ class BulkCreateBots implements ShouldQueue
             return;
         }
 
+        $defaultPassword = (string) ($this->payload['password'] ?? '');
+        if ($defaultPassword === '') {
+            $defaultPassword = 'botpassword123';
+        }
+
         $creator = app(CreatesNewUsers::class);
         $batchToken = (string) ($this->payload['batch_token'] ?? Str::lower(Str::random(8)));
 
@@ -54,10 +59,10 @@ class BulkCreateBots implements ShouldQueue
             );
 
             try {
-                DB::transaction(function () use ($creator, $email, $i) {
+                DB::transaction(function () use ($creator, $email, $i, $defaultPassword) {
                     $user = $creator->create([
                         'email' => $email,
-                        'password' => (string) ($this->payload['password'] ?? Str::random(16)),
+                        'password' => $defaultPassword,
                     ]);
 
                     $personality = ($this->payload['personality'] ?? 'random') === 'random'

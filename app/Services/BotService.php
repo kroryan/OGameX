@@ -359,6 +359,10 @@ class BotService
         if ($total < 5000) {
             // Early game: spend more aggressively to avoid stalling.
             $reserve = min($reserve, 0.2);
+            $roles = $this->getPlanetRoles();
+            if (($roles[$planet->getPlanetId()] ?? null) === 'colony') {
+                $reserve = min($reserve, 0.1);
+            }
         } elseif ($usagePercent < $maxStorageBeforeSpending) {
             // Keep more resources when storage isn't pressured
             $reserve = min(0.9, max($reserve, 0.6));
@@ -796,6 +800,12 @@ class BotService
     public function findPlanetWithResearchQueueSpace(): ?PlanetService
     {
         $planets = $this->player->planets->all();
+        $roles = $this->getPlanetRoles();
+        foreach ($planets as $planet) {
+            if (($roles[$planet->getPlanetId()] ?? null) === 'research' && !$this->isResearchQueueFull($planet)) {
+                return $planet;
+            }
+        }
         foreach ($planets as $planet) {
             if (!$this->isResearchQueueFull($planet)) {
                 return $planet;
@@ -1353,12 +1363,14 @@ class BotService
         $fleetBuildings = ['shipyard', 'robot_factory', 'nano_factory', 'space_dock'];
         $defenseBuildings = ['missile_silo', 'space_dock'];
         $researchBuildings = ['research_lab', 'intergalactic_research_network'];
+        $colonyBuildings = ['metal_mine', 'crystal_mine', 'deuterium_synthesizer', 'solar_plant', 'metal_store', 'crystal_store', 'deuterium_store'];
 
         return match ($role) {
             'economy' => in_array($machineName, $economyBuildings) ? 25 : 0,
             'fleet' => in_array($machineName, $fleetBuildings) ? 25 : 0,
             'defense' => in_array($machineName, $defenseBuildings) ? 25 : 0,
             'research' => in_array($machineName, $researchBuildings) ? 25 : 0,
+            'colony' => in_array($machineName, $colonyBuildings) ? 25 : 0,
             default => 0,
         };
     }
@@ -1513,9 +1525,10 @@ class BotService
         }
 
         $economyPlanet = $this->getPlanetByRole('economy');
+        $colonyPlanet = $this->getColonyNeedingResources();
         $fleetPlanet = $this->getPlanetByRole('fleet');
         $richest = $economyPlanet ?? $this->getRichestPlanet();
-        $lowest = $fleetPlanet ?? $this->getLowestStoragePlanet();
+        $lowest = $colonyPlanet ?? $fleetPlanet ?? $this->getLowestStoragePlanet();
         if ($richest === null || $lowest === null || $richest->getPlanetId() === $lowest->getPlanetId()) {
             return false;
         }
@@ -1537,6 +1550,44 @@ class BotService
         return $this->player->getFleetSlotsInUse() / $max;
     }
 
+    private function getColonyNeedingResources(): ?PlanetService
+    {
+        $planets = $this->player->planets->all();
+        if (count($planets) <= 1) {
+            return null;
+        }
+
+        $roles = $this->getPlanetRoles();
+        $candidate = null;
+        $lowestScore = PHP_INT_MAX;
+
+        foreach ($planets as $planet) {
+            $role = $roles[$planet->getPlanetId()] ?? 'colony';
+            if (!in_array($role, ['colony', 'research', 'defense'], true)) {
+                continue;
+            }
+
+            $mineScore = $planet->getObjectLevel('metal_mine')
+                + $planet->getObjectLevel('crystal_mine')
+                + $planet->getObjectLevel('deuterium_synthesizer');
+
+            $resources = $planet->getResources();
+            $resourceSum = $resources->metal->get() + $resources->crystal->get() + $resources->deuterium->get();
+
+            $score = ($mineScore * 1000) + $resourceSum;
+            if ($score < $lowestScore) {
+                $lowestScore = $score;
+                $candidate = $planet;
+            }
+        }
+
+        if ($candidate && $lowestScore < 15000) {
+            return $candidate;
+        }
+
+        return null;
+    }
+
     public function sendResourceTransport(): bool
     {
         try {
@@ -1546,7 +1597,9 @@ class BotService
             }
 
             $source = $this->getPlanetByRole('economy') ?? $this->getRichestPlanet();
-            $target = $this->getPlanetByRole('fleet') ?? $this->getLowestStoragePlanet();
+            $target = $this->getColonyNeedingResources()
+                ?? $this->getPlanetByRole('fleet')
+                ?? $this->getLowestStoragePlanet();
             if ($source === null || $target === null || $source->getPlanetId() === $target->getPlanetId()) {
                 $this->logAction(BotActionType::TRADE, 'No valid transport target', [], 'failed');
                 return false;

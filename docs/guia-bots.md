@@ -282,6 +282,9 @@ Estos roles influyen en:
 - **Producción de flota/defensa** (planetario).
 - **Transporte interno** (economy → fleet).
 
+Los bots también envían recursos desde el planeta economía hacia colonias
+recién fundadas para acelerar su desarrollo temprano.
+
 ### Estrategia a largo plazo (multi‑día)
 
 Los bots eligen una estrategia con duración de 24–48h:

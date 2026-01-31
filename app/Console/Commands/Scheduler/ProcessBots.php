@@ -33,10 +33,12 @@ class ProcessBots extends Command
         }
 
         $botFactory = app(\OGame\Factories\BotServiceFactory::class);
+        $allActiveBots = $botFactory->getActiveBots();
         $bots = $botFactory->getActiveBotServices();
 
         if (empty($bots)) {
-            $this->info('No active bots to process.');
+            $this->info('No bots in active schedule window to process.');
+            $this->info('Total active bots: ' . $allActiveBots->count());
             return 0;
         }
 

@@ -49,6 +49,11 @@ class BulkCreateBots implements ShouldQueue
 
         $creator = app(CreatesNewUsers::class);
         $batchToken = (string) ($this->payload['batch_token'] ?? Str::lower(Str::random(8)));
+        $prefix = trim((string) ($this->payload['bot_name_prefix'] ?? 'Bot'));
+        if ($prefix === '') {
+            $prefix = 'Bot';
+        }
+        $nameOffset = Bot::where('name', 'like', $prefix . ' %')->count();
 
         for ($i = 1; $i <= $count; $i++) {
             $email = $this->generateUniqueBotEmail(
@@ -59,7 +64,7 @@ class BulkCreateBots implements ShouldQueue
             );
 
             try {
-                DB::transaction(function () use ($creator, $email, $i, $defaultPassword) {
+                DB::transaction(function () use ($creator, $email, $i, $defaultPassword, $prefix, $nameOffset) {
                     $user = $creator->create([
                         'email' => $email,
                         'password' => $defaultPassword,
@@ -73,11 +78,7 @@ class BulkCreateBots implements ShouldQueue
                         ? BotTargetType::cases()[array_rand(BotTargetType::cases())]->value
                         : (string) $this->payload['priority_target_type'];
 
-                    $prefix = trim((string) ($this->payload['bot_name_prefix'] ?? 'Bot'));
-                    if ($prefix === '') {
-                        $prefix = 'Bot';
-                    }
-                    $botName = sprintf('%s %03d', $prefix, $i);
+                    $botName = sprintf('%s %03d', $prefix, $nameOffset + $i);
 
                     Bot::create([
                         'user_id' => $user->id,

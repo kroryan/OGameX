@@ -247,6 +247,7 @@ Route::middleware(['auth', 'globalgame', 'locale', 'admin'])->group(function () 
     Route::delete('/admin/bots/{botId}', [BotManagementController::class, 'delete'])->name('admin.bots.delete');
     Route::post('/admin/bots/{botId}/toggle', [BotManagementController::class, 'toggle'])->name('admin.bots.toggle');
     Route::get('/admin/bots/{botId}/logs', [BotManagementController::class, 'logs'])->name('admin.bots.logs');
+    Route::get('/admin/bots/logs', [BotManagementController::class, 'logsAll'])->name('admin.bots.logs-all');
     Route::post('/admin/bots/{botId}/force-action', [BotManagementController::class, 'forceAction'])->name('admin.bots.force-action');
     Route::get('/admin/bots/stats', [BotManagementController::class, 'stats'])->name('admin.bots.stats');
 });

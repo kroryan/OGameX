@@ -63,6 +63,7 @@
                     <div style="text-align: center; margin-bottom: 20px;">
                         <a href="{{ route('admin.bots.create') }}" class="btn_blue">Create New Bot</a>
                         <a href="{{ route('admin.bots.stats') }}" class="btn_blue">View Statistics</a>
+                        <a href="{{ route('admin.bots.logs-all') }}" class="btn_blue">View All Logs</a>
                     </div>
 
                     <!-- Bulk Create Bots -->
@@ -144,6 +145,7 @@
                                     <th>Personality</th>
                                     <th>Target Type</th>
                                     <th>Status</th>
+                                    <th>Active Now</th>
                                     <th>Last Action</th>
                                     <th>Actions</th>
                                 </tr>
@@ -165,6 +167,13 @@
                                                 <span style="color: #0f0;">● Active</span>
                                             @else
                                                 <span style="color: #f00;">● Inactive</span>
+                                            @endif
+                                        </td>
+                                        <td>
+                                            @if ($bot->isActive())
+                                                <span style="color: #0f0;">Yes</span>
+                                            @else
+                                                <span style="color: #999;">No</span>
                                             @endif
                                         </td>
                                         <td style="font-size: 0.9em;">

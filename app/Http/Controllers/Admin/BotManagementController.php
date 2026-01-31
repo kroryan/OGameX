@@ -350,6 +350,33 @@ class BotManagementController extends OGameController
     }
 
     /**
+     * Show logs for all bots.
+     */
+    public function logsAll(Request $request): View
+    {
+        $query = BotLog::with('bot')->latest();
+
+        if ($request->filled('action_type')) {
+            $query->where('action_type', $request->input('action_type'));
+        }
+
+        if ($request->filled('bot_id')) {
+            $query->where('bot_id', (int) $request->input('bot_id'));
+        }
+
+        $logs = $query->paginate(100);
+        $bots = Bot::orderBy('name')->get();
+
+        return view('ingame.admin.bots-logs-all', [
+            'logs' => $logs,
+            'bots' => $bots,
+            'actionTypes' => BotActionType::cases(),
+            'currentFilter' => $request->input('action_type'),
+            'currentBot' => $request->input('bot_id'),
+        ]);
+    }
+
+    /**
      * Force bot to execute a specific action.
      */
     public function forceAction(Request $request, int $botId): RedirectResponse

@@ -34,6 +34,12 @@ return [
 
     // Allow bots to join/create alliances
     'allow_alliances' => true,
+    'alliance_apply_chance' => 0.05, // 5% per bot tick to apply/join
+    'alliance_create_chance' => 0.02, // 2% per bot tick to create if none available
+    'alliance_max_created' => 50, // Cap total bot-created alliances
+    'alliance_max_members' => 30, // Soft cap per alliance for bot logic
+    'alliance_action_cooldown_minutes' => 360,
+    'alliance_auto_accept' => true,
 
     // Maximum level a bot will build buildings/research to
     'max_building_level' => 30,

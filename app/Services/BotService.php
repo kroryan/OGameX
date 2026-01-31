@@ -1988,24 +1988,74 @@ class BotService
         try {
             $user = $this->player->getUser();
             if ($user->alliance_id) {
+                if (config('bots.alliance_auto_accept', true)) {
+                    $this->processAllianceApplications($user->alliance_id, $user->id);
+                }
                 return;
             }
 
-            if (mt_rand(1, 100) > 5) {
+            $cooldownMinutes = (int) config('bots.alliance_action_cooldown_minutes', 360);
+            $cacheKey = 'bot_alliance_action_' . $this->bot->id;
+            $lastAction = cache()->get($cacheKey);
+            if ($lastAction) {
                 return;
             }
 
-            $openAlliance = Alliance::where('is_open', true)->inRandomOrder()->first();
+            $applyChance = (float) config('bots.alliance_apply_chance', 0.05);
+            if (mt_rand(1, 100) > ($applyChance * 100)) {
+                return;
+            }
+
+            $maxMembers = (int) config('bots.alliance_max_members', 30);
+            $openAlliance = Alliance::where('is_open', true)
+                ->withCount('members')
+                ->where('members_count', '<', $maxMembers)
+                ->inRandomOrder()
+                ->first();
             $allianceService = app(\OGame\Services\AllianceService::class);
 
             if ($openAlliance) {
                 $allianceService->applyToAlliance($user->id, $openAlliance->id, 'Bot auto-application');
+                cache()->put($cacheKey, now()->timestamp, now()->addMinutes($cooldownMinutes));
+                return;
+            }
+
+            $createChance = (float) config('bots.alliance_create_chance', 0.02);
+            if (mt_rand(1, 100) > ($createChance * 100)) {
+                return;
+            }
+
+            $maxAlliances = (int) config('bots.alliance_max_created', 50);
+            $currentAlliances = Alliance::count();
+            if ($currentAlliances >= $maxAlliances) {
                 return;
             }
 
             $tag = strtoupper(Str::random(4));
             $name = 'Bot Legion ' . strtoupper(Str::random(3));
-            $allianceService->createAlliance($user->id, $tag, $name);
+            $alliance = $allianceService->createAlliance($user->id, $tag, $name);
+            $alliance->is_open = true;
+            $alliance->application_text = 'Bots and players welcome.';
+            $alliance->save();
+            cache()->put($cacheKey, now()->timestamp, now()->addMinutes($cooldownMinutes));
+        } catch (Exception) {
+            // Ignore alliance errors
+        }
+    }
+
+    private function processAllianceApplications(int $allianceId, int $userId): void
+    {
+        try {
+            $allianceService = app(\OGame\Services\AllianceService::class);
+            $applications = $allianceService->getPendingApplications($allianceId);
+
+            if ($applications->isEmpty()) {
+                return;
+            }
+
+            foreach ($applications as $application) {
+                $allianceService->acceptApplication($application->id, $userId);
+            }
         } catch (Exception) {
             // Ignore alliance errors
         }

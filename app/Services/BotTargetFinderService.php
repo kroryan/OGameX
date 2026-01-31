@@ -24,11 +24,14 @@ class BotTargetFinderService
      */
     public function findTarget(BotService $bot, BotTargetType $targetType): ?PlanetService
     {
-        // Don't attack other bots
-        $botUserIds = \OGame\Models\Bot::pluck('user_id')->toArray();
+        $botUserIds = [];
+        if (!config('bots.allow_target_bots', true)) {
+            $botUserIds = \OGame\Models\Bot::pluck('user_id')->toArray();
+        }
+        $selfId = $bot->getPlayer()->getId();
 
         return match ($targetType) {
-            BotTargetType::RANDOM => $this->findRandomTarget($botUserIds),
+            BotTargetType::RANDOM => $this->findRandomTarget($botUserIds, $selfId),
             BotTargetType::WEAK => $this->findWeakTarget($bot, $botUserIds),
             BotTargetType::RICH => $this->findRichTarget($bot, $botUserIds),
             BotTargetType::SIMILAR => $this->findSimilarTarget($bot, $botUserIds),
@@ -38,13 +41,16 @@ class BotTargetFinderService
     /**
      * Find a random target planet.
      */
-    private function findRandomTarget(array $excludeUserIds = []): ?PlanetService
+    private function findRandomTarget(array $excludeUserIds = [], int $selfUserId = 0): ?PlanetService
     {
         $query = Planet::query()
             ->whereHas('user', function ($q) {
                 $q->where('vacation_mode', false);
             })
             ->whereNotIn('user_id', $excludeUserIds)
+            ->when($selfUserId > 0, function ($q) use ($selfUserId) {
+                $q->where('user_id', '!=', $selfUserId);
+            })
             ->inRandomOrder()
             ->limit(10);
 

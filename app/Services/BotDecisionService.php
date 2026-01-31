@@ -84,23 +84,28 @@ class BotDecisionService
         $totalResources = $state['total_resources_sum'] ?? 0;
 
         // Build is only available if we can afford at least one building
-        if (($state['can_afford_build'] ?? false) && !$state['all_building_queues_full']) {
+        if (!$this->botService->shouldSkipAction('build') && ($state['can_afford_build'] ?? false) && !$state['all_building_queues_full']) {
             $actions[] = BotActionType::BUILD;
         }
 
         // Research is only available if we have resources AND research queues are not all full
-        if ($state['can_afford_research'] && !$state['all_research_queues_full']) {
+        if (!$this->botService->shouldSkipAction('research') && $state['can_afford_research'] && !$state['all_research_queues_full']) {
             $actions[] = BotActionType::RESEARCH;
         }
 
         // Fleet is always available (unit queue is unlimited) if we have resources
-        if ($state['can_afford_fleet']) {
+        if (!$this->botService->shouldSkipAction('fleet') && $state['can_afford_fleet']) {
             $actions[] = BotActionType::FLEET;
         }
 
         // Attack is only available if not on cooldown and has fleet
-        if ($this->botService->canAttack() && $this->botService->hasFleetSlotsAvailable() && $state['has_significant_fleet']) {
+        if (!$this->botService->shouldSkipAction('attack') && $this->botService->canAttack() && $this->botService->hasFleetSlotsAvailable() && $state['has_significant_fleet']) {
             $actions[] = BotActionType::ATTACK;
+        }
+
+        // Trade/transport if resource imbalance exists
+        if (!$this->botService->shouldSkipAction('trade') && $this->botService->shouldTradeResources()) {
+            $actions[] = BotActionType::TRADE;
         }
 
         return $actions;
@@ -117,6 +122,11 @@ class BotDecisionService
         $weights = $objective->getActionWeights();
         $baseScore = $weights[$action->value] ?? 10;
         $score += $baseScore;
+
+        // Apply bot-specific action probabilities
+        $probWeights = $this->botService->getBot()->getActionProbabilities();
+        $probModifier = ($probWeights[$action->value] ?? 100) / 100;
+        $score *= $probModifier;
 
         // Apply modifiers based on game phase
         $phaseModifier = $this->getPhaseModifier($action, $state['game_phase']);
@@ -145,18 +155,21 @@ class BotDecisionService
                 BotActionType::RESEARCH->value => 1.3,
                 BotActionType::FLEET->value => 0.5,
                 BotActionType::ATTACK->value => 0.2,
+                BotActionType::TRADE->value => 0.6,
             ],
             'mid' => [
                 BotActionType::BUILD->value => 1.0,
                 BotActionType::RESEARCH->value => 1.0,
                 BotActionType::FLEET->value => 1.2,
                 BotActionType::ATTACK->value => 1.0,
+                BotActionType::TRADE->value => 1.0,
             ],
             'late' => [
                 BotActionType::BUILD->value => 0.7,
                 BotActionType::RESEARCH->value => 0.8,
                 BotActionType::FLEET->value => 1.3,
                 BotActionType::ATTACK->value => 1.4,
+                BotActionType::TRADE->value => 1.1,
             ],
         ];
 
@@ -214,6 +227,10 @@ class BotDecisionService
                     $modifier = 1.4;
                 }
                 break;
+            case 'trade':
+                // Stronger if storage is near full
+                $modifier = $this->botService->isStoragePressureHigh() ? 1.5 : 1.1;
+                break;
         }
 
         return $modifier;
@@ -237,6 +254,9 @@ class BotDecisionService
                     // Bonus for energy/production techs
                     $bonus += 15;
                 }
+                if ($action === BotActionType::TRADE) {
+                    $bonus += 20;
+                }
                 break;
 
             case BotObjective::FLEET_ACCUMULATION->value:
@@ -258,6 +278,9 @@ class BotDecisionService
                     // Defense techs
                     $bonus += 20;
                 }
+                if ($action === BotActionType::FLEET) {
+                    $bonus += 10;
+                }
                 break;
 
             case BotObjective::TERRITORIAL_EXPANSION->value:
@@ -272,6 +295,9 @@ class BotDecisionService
                         $bonus += 25;
                     }
                 }
+                if ($action === BotActionType::TRADE) {
+                    $bonus += 10;
+                }
                 break;
 
             case BotObjective::RAIDING_AND_PROFIT->value:
@@ -280,6 +306,9 @@ class BotDecisionService
                 }
                 if ($action === BotActionType::FLEET) {
                     $bonus += 30;
+                }
+                if ($action === BotActionType::TRADE) {
+                    $bonus += 5;
                 }
                 break;
         }

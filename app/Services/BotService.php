@@ -343,8 +343,39 @@ class BotService
             return $total;
         }
         $reserve = (float) ($economy['save_for_upgrade_percent'] ?? 0.3);
+        $maxStorageBeforeSpending = (float) ($economy['max_storage_before_spending'] ?? 0.9);
+        $usagePercent = $this->getStorageUsagePercent($planet);
+        if ($usagePercent < $maxStorageBeforeSpending) {
+            // Keep more resources when storage isn't pressured
+            $reserve = min(0.9, max($reserve, 0.6));
+        }
 
         return $total * max(0, 1 - $reserve);
+    }
+
+    public function getStorageUsagePercent(PlanetService $planet): float
+    {
+        $resources = $planet->getResources();
+        $metalMax = $planet->metalStorage()->get();
+        $crystalMax = $planet->crystalStorage()->get();
+        $deuteriumMax = $planet->deuteriumStorage()->get();
+        $maxStorage = $metalMax + $crystalMax + $deuteriumMax;
+        if ($maxStorage <= 0) {
+            return 0.0;
+        }
+        $currentTotal = $resources->metal->get() + $resources->crystal->get() + $resources->deuterium->get();
+        return $currentTotal / $maxStorage;
+    }
+
+    public function isStoragePressureHigh(): bool
+    {
+        $planet = $this->getRichestPlanet();
+        if ($planet === null) {
+            return false;
+        }
+        $economy = $this->bot->getEconomySettings();
+        $maxStorageBeforeSpending = (float) ($economy['max_storage_before_spending'] ?? 0.9);
+        return $this->getStorageUsagePercent($planet) >= $maxStorageBeforeSpending;
     }
 
     private function shouldConsiderUnitForPersonality(string $machineName): bool
@@ -666,6 +697,7 @@ class BotService
         $personality = $this->bot->getPersonality();
         $price = ObjectService::getObjectPrice($machineName, $planet);
         $cost = $price->metal->get() + $price->crystal->get() + $price->deuterium->get();
+        $prioritizeProduction = $economy['prioritize_production'] ?? 'balanced';
 
         // Get game phase
         $analyzer = new \OGame\Services\GameStateAnalyzer();
@@ -675,7 +707,7 @@ class BotService
         // CRITICAL buildings for progression
         $criticalBuildings = [
             'metal_mine', 'crystal_mine', 'deuterium_synthesizer', // Production
-            'solar_plant', 'fusion_reactor', // Energy
+            'solar_plant', 'fusion_plant', // Energy
             'metal_store', 'crystal_store', 'deuterium_store', // Storage
             'robot_factory', 'shipyard', 'research_lab', // Facilities
         ];
@@ -698,25 +730,15 @@ class BotService
             'research_lab' => 90,
 
             // TIER 3: Advanced production (mid game)
-            'nanite_factory' => 85,
-            'metal_den' => 80,
-            'crystal_den' => 80,
-            'deuterium_den' => 75,
+            'nano_factory' => 85,
 
             // TIER 4: Specialized buildings
             'missile_silo' => 70,
             'sensor_phalanx' => 65,
             'jump_gate' => 60,
-            'orbital_shipyard' => 55,
             'lunar_base' => 50,
-
-            // TIER 5: Defense
-            'ion_cannon' => 40,
-            'plasma_cannon' => 35,
-            'gauss_cannon' => 30,
-            'shield_domed' => 45,
-            'small_shield_dome' => 35,
-            'large_shield_dome' => 40,
+            'terraformer' => 75,
+            'space_dock' => 70,
         ];
 
         $base = $priorities[$machineName] ?? 50;
@@ -733,52 +755,49 @@ class BotService
             }
         } elseif ($phase === 'mid') {
             // Mid game: boost nanite and facilities
-            if ($machineName === 'nanite_factory') {
+            if ($machineName === 'nano_factory') {
                 $base += 40;
             }
             if (in_array($machineName, ['robot_factory', 'shipyard', 'research_lab']) && $currentLevel < 10) {
                 $base += 20;
             }
-            // Start building defenses
-            if (str_starts_with($machineName, 'shield_domed') || str_starts_with($machineName, 'cannon')) {
-                $base += 15;
-            }
         } elseif ($phase === 'late') {
             // Late game: focus on advanced buildings
-            if ($machineName === 'orbital_shipyard') {
-                $base += 50;
-            }
-            if (in_array($machineName, ['metal_den', 'crystal_den', 'deuterium_den'])) {
-                $base += 30;
+            if ($machineName === 'space_dock') {
+                $base += 25;
             }
         }
 
         // Personality-based modifiers
         if ($personality === BotPersonality::ECONOMIC) {
             // Economic bots LOVE mines and production
-            if (in_array($machineName, ['metal_mine', 'crystal_mine', 'deuterium_synthesizer', 'metal_den', 'crystal_den', 'deuterium_den'])) {
+            if (in_array($machineName, ['metal_mine', 'crystal_mine', 'deuterium_synthesizer'])) {
                 $base += 30;
             }
-            if (in_array($machineName, ['nanite_factory', 'robot_factory', 'fusion_reactor'])) {
+            if (in_array($machineName, ['nano_factory', 'robot_factory', 'fusion_plant'])) {
                 $base += 20;
             }
         } elseif ($personality === BotPersonality::AGGRESSIVE) {
             // Aggressive bots prioritize fleet production facilities
-            if (in_array($machineName, ['robot_factory', 'shipyard', 'nanite_factory', 'orbital_shipyard'])) {
+            if (in_array($machineName, ['robot_factory', 'shipyard', 'nano_factory'])) {
                 $base += 30;
-            }
-            // Some defenses too
-            if (in_array($machineName, ['missile_silo', 'plasma_cannon', 'gauss_cannon'])) {
-                $base += 20;
             }
         } elseif ($personality === BotPersonality::DEFENSIVE) {
             // Defensive bots prioritize storage and defenses
-            if (in_array($machineName, ['metal_store', 'crystal_store', 'deuterium_store', 'shield_domed', 'small_shield_dome', 'large_shield_dome'])) {
+            if (in_array($machineName, ['metal_store', 'crystal_store', 'deuterium_store'])) {
                 $base += 30;
             }
-            if (in_array($machineName, ['missile_silo', 'ion_cannon', 'plasma_cannon', 'gauss_cannon'])) {
+            if (in_array($machineName, ['missile_silo'])) {
                 $base += 35;
             }
+        }
+
+        if ($prioritizeProduction === 'metal' && $machineName === 'metal_mine') {
+            $base += 25;
+        } elseif ($prioritizeProduction === 'crystal' && $machineName === 'crystal_mine') {
+            $base += 25;
+        } elseif ($prioritizeProduction === 'deuterium' && $machineName === 'deuterium_synthesizer') {
+            $base += 25;
         }
 
         // Level curve: prioritize lower levels for faster growth
@@ -1019,15 +1038,31 @@ class BotService
         ];
 
         $base = $basePriorities[$machineName] ?? 50;
+        $defenseUnits = [
+            'rocket_launcher', 'light_laser', 'heavy_laser',
+            'gauss_cannon', 'ion_cannon', 'plasma_turret',
+            'small_shield_dome', 'large_shield_dome',
+            'anti_ballistic_missile', 'interplanetary_missile',
+        ];
 
         // Personality adjustments
         if ($personality === BotPersonality::AGGRESSIVE) {
             if (in_array($machineName, ['battle_ship', 'battlecruiser', 'destroyer', 'bomber'])) {
                 $base += 15;
             }
+            if (in_array($machineName, $defenseUnits)) {
+                $base -= 10;
+            }
         } elseif ($personality === BotPersonality::ECONOMIC) {
             if (in_array($machineName, ['small_cargo', 'large_cargo'])) {
                 $base += 15;
+            }
+            if (in_array($machineName, $defenseUnits)) {
+                $base -= 5;
+            }
+        } elseif ($personality === BotPersonality::DEFENSIVE) {
+            if (in_array($machineName, $defenseUnits)) {
+                $base += 20;
             }
         }
 
@@ -1039,6 +1074,128 @@ class BotService
         $amountBonus = min(20, $amount / 10);
 
         return $base + $amountBonus;
+    }
+
+    public function shouldTradeResources(): bool
+    {
+        if (!$this->hasFleetSlotsAvailable()) {
+            return false;
+        }
+        $planets = $this->player->planets->all();
+        if (count($planets) < 2) {
+            return false;
+        }
+
+        $richest = $this->getRichestPlanet();
+        $lowest = $this->getLowestStoragePlanet();
+        if ($richest === null || $lowest === null || $richest->getPlanetId() === $lowest->getPlanetId()) {
+            return false;
+        }
+
+        $richUsage = $this->getStorageUsagePercent($richest);
+        $lowUsage = $this->getStorageUsagePercent($lowest);
+        $economy = $this->bot->getEconomySettings();
+        $maxStorageBeforeSpending = (float) ($economy['max_storage_before_spending'] ?? 0.9);
+
+        return $richUsage >= $maxStorageBeforeSpending && $lowUsage < 0.6;
+    }
+
+    public function sendResourceTransport(): bool
+    {
+        try {
+            if (!$this->hasFleetSlotsAvailable()) {
+                $this->logAction(BotActionType::TRADE, 'No fleet slots available for transport', [], 'failed');
+                return false;
+            }
+
+            $source = $this->getRichestPlanet();
+            $target = $this->getLowestStoragePlanet();
+            if ($source === null || $target === null || $source->getPlanetId() === $target->getPlanetId()) {
+                $this->logAction(BotActionType::TRADE, 'No valid transport target', [], 'failed');
+                return false;
+            }
+
+            $availableLarge = $source->getObjectAmount('large_cargo');
+            $availableSmall = $source->getObjectAmount('small_cargo');
+            if ($availableLarge + $availableSmall <= 0) {
+                $this->logAction(BotActionType::TRADE, 'No cargo ships available', [], 'failed');
+                return false;
+            }
+
+            $fleet = new \OGame\GameObjects\Models\Units\UnitCollection();
+            if ($availableLarge > 0) {
+                $fleet->addUnit(ObjectService::getUnitObjectByMachineName('large_cargo'), min(20, $availableLarge));
+            }
+            if ($availableSmall > 0) {
+                $fleet->addUnit(ObjectService::getUnitObjectByMachineName('small_cargo'), min(40, $availableSmall));
+            }
+
+            if ($fleet->getAmount() === 0) {
+                $this->logAction(BotActionType::TRADE, 'No cargo ships available', [], 'failed');
+                return false;
+            }
+
+            $fleetMissionService = app(FleetMissionService::class);
+            $targetCoords = $target->getPlanetCoordinates();
+            $consumption = $fleetMissionService->calculateConsumption($source, $fleet, $targetCoords, 3, 100);
+            if ($source->getResources()->deuterium->get() < $consumption) {
+                $this->logAction(BotActionType::TRADE, 'Not enough deuterium for transport', [
+                    'required' => $consumption,
+                    'available' => $source->getResources()->deuterium->get(),
+                ], 'failed');
+                return false;
+            }
+
+            $resources = $source->getResources();
+            $cargoCapacity = $fleet->getTotalCargoCapacity($this->player);
+            if ($cargoCapacity <= 0) {
+                $this->logAction(BotActionType::TRADE, 'No cargo capacity', [], 'failed');
+                return false;
+            }
+
+            $economy = $this->bot->getEconomySettings();
+            $reserve = (float) ($economy['save_for_upgrade_percent'] ?? 0.3);
+            $sendableMetal = max(0, (int)($resources->metal->get() * (1 - $reserve)));
+            $sendableCrystal = max(0, (int)($resources->crystal->get() * (1 - $reserve)));
+            $sendableDeut = max(0, (int)($resources->deuterium->get() * (1 - $reserve) - $consumption));
+
+            $sendTotal = min($cargoCapacity, $sendableMetal + $sendableCrystal + $sendableDeut);
+            if ($sendTotal <= 0) {
+                $this->logAction(BotActionType::TRADE, 'No sendable resources', [], 'failed');
+                return false;
+            }
+
+            $split = (int)($sendTotal / 3);
+            $toSend = new Resources(
+                metal: min($sendableMetal, $split),
+                crystal: min($sendableCrystal, $split),
+                deuterium: min($sendableDeut, $sendTotal - ($split * 2)),
+                energy: 0
+            );
+
+            $fleetMissionService->createNewFromPlanet(
+                $source,
+                $targetCoords,
+                \OGame\Models\Enums\PlanetType::Planet,
+                3,
+                $fleet,
+                $toSend,
+                100,
+                0
+            );
+
+            $this->logAction(BotActionType::TRADE, "Sent transport to {$targetCoords->asString()}", [
+                'metal' => $toSend->metal->get(),
+                'crystal' => $toSend->crystal->get(),
+                'deuterium' => $toSend->deuterium->get(),
+            ]);
+
+            $this->bot->updateLastAction();
+            return true;
+        } catch (Exception $e) {
+            $this->logAction(BotActionType::TRADE, "Failed to transport: {$e->getMessage()}", [], 'failed');
+            return false;
+        }
     }
 
     /**

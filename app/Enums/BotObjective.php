@@ -47,11 +47,11 @@ enum BotObjective: string
     public function getActionWeights(): array
     {
         return match ($this) {
-            self::ECONOMIC_GROWTH => ['build' => 60, 'research' => 30, 'fleet' => 10, 'attack' => 0],
-            self::FLEET_ACCUMULATION => ['build' => 15, 'research' => 15, 'fleet' => 50, 'attack' => 20],
-            self::DEFENSIVE_FORTIFICATION => ['build' => 70, 'research' => 20, 'fleet' => 5, 'attack' => 5],
-            self::TERRITORIAL_EXPANSION => ['build' => 40, 'research' => 30, 'fleet' => 30, 'attack' => 0],
-            self::RAIDING_AND_PROFIT => ['build' => 10, 'research' => 10, 'fleet' => 40, 'attack' => 40],
+            self::ECONOMIC_GROWTH => ['build' => 55, 'research' => 25, 'fleet' => 10, 'attack' => 0, 'trade' => 10],
+            self::FLEET_ACCUMULATION => ['build' => 15, 'research' => 15, 'fleet' => 50, 'attack' => 20, 'trade' => 0],
+            self::DEFENSIVE_FORTIFICATION => ['build' => 60, 'research' => 20, 'fleet' => 10, 'attack' => 5, 'trade' => 5],
+            self::TERRITORIAL_EXPANSION => ['build' => 35, 'research' => 30, 'fleet' => 30, 'attack' => 0, 'trade' => 5],
+            self::RAIDING_AND_PROFIT => ['build' => 10, 'research' => 10, 'fleet' => 40, 'attack' => 35, 'trade' => 5],
         };
     }
 }

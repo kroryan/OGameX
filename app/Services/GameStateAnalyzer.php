@@ -204,7 +204,7 @@ class GameStateAnalyzer
             'metal_mine', 'crystal_mine', 'deuterium_synthesizer',
             'metal_store', 'crystal_store', 'deuterium_store',
             'robot_factory', 'shipyard', 'research_lab',
-            'solar_plant', 'fusion_reactor',
+            'solar_plant', 'fusion_plant',
         ];
 
         $points = 0;

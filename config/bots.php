@@ -16,6 +16,9 @@ return [
     // How often (in minutes) the bot scheduler should run
     'scheduler_interval_minutes' => env('BOTS_SCHEDULER_INTERVAL', 5),
 
+    // Number of bots to process per scheduler run (prevents long locks)
+    'scheduler_batch_size' => env('BOTS_SCHEDULER_BATCH_SIZE', 50),
+
     // Default cooldown (in hours) after a bot attacks before it can attack again
     'default_attack_cooldown_hours' => 2,
 
@@ -25,6 +28,9 @@ return [
     // Chance (0-1) for a bot to go on expedition instead of building fleet
     // 0.15 = 15% chance
     'expedition_chance' => 0.15,
+
+    // Allow bots to target other bots (true = bots can attack bots)
+    'allow_target_bots' => true,
 
     // Maximum level a bot will build buildings/research to
     'max_building_level' => 30,

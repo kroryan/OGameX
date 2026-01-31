@@ -35,4 +35,4 @@ Schedule::command(CleanupWreckFields::class)->hourly()->withoutOverlapping();
 Schedule::command(DarkMatterRegenerateCommand::class)->everyFiveMinutes()->withoutOverlapping();
 
 // Process active bots every 5 minutes
-Schedule::command(ProcessBots::class)->everyFiveMinutes()->withoutOverlapping();
+Schedule::command(ProcessBots::class)->everyFiveMinutes();

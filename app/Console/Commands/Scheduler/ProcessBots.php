@@ -4,6 +4,7 @@ namespace OGame\Console\Commands\Scheduler;
 
 use Illuminate\Console\Command;
 use OGame\Enums\BotActionType;
+use OGame\Models\Bot;
 use OGame\Services\BotDecisionService;
 use OGame\Services\BotService;
 
@@ -33,12 +34,40 @@ class ProcessBots extends Command
         }
 
         $botFactory = app(\OGame\Factories\BotServiceFactory::class);
-        $allActiveBots = $botFactory->getActiveBots();
-        $bots = $botFactory->getActiveBotServices();
+        $batchSize = (int) config('bots.scheduler_batch_size', 50);
+        $batchSize = max(1, min(500, $batchSize));
+
+        $allActiveQuery = Bot::where('is_active', true)
+            ->orderByRaw('last_action_at is null desc')
+            ->orderBy('last_action_at');
+        $totalActive = (clone $allActiveQuery)->count();
+
+        if ($totalActive === 0) {
+            $this->info('No active bots to process.');
+            return 0;
+        }
+
+        $offset = (int) cache()->get('bots.scheduler_offset', 0);
+        if ($offset >= $totalActive) {
+            $offset = 0;
+        }
+
+        $batch = $allActiveQuery->skip($offset)->take($batchSize)->get();
+        if ($batch->isEmpty()) {
+            $offset = 0;
+            $batch = $allActiveQuery->skip($offset)->take($batchSize)->get();
+        }
+
+        $bots = [];
+        foreach ($batch as $bot) {
+            if ($bot->isActive()) {
+                $bots[] = $botFactory->makeFromBotModel($bot);
+            }
+        }
 
         if (empty($bots)) {
             $this->info('No bots in active schedule window to process.');
-            $this->info('Total active bots: ' . $allActiveBots->count());
+            $this->info('Total active bots: ' . $totalActive);
             return 0;
         }
 
@@ -59,6 +88,12 @@ class ProcessBots extends Command
         }
 
         $this->info("Bot processing complete: {$successCount} success, {$failCount} failed.");
+
+        $newOffset = $offset + count($bots);
+        if ($newOffset >= $totalActive) {
+            $newOffset = 0;
+        }
+        cache()->put('bots.scheduler_offset', $newOffset, now()->addHours(6));
 
         return 0;
     }
@@ -130,6 +165,12 @@ class ProcessBots extends Command
             $this->error("  - Research queue update failed: {$e->getMessage()}");
         }
 
+        try {
+            $player->updateFleetMissions();
+        } catch (\Exception $e) {
+            $this->error("  - Fleet missions update failed: {$e->getMessage()}");
+        }
+
         foreach ($player->planets->all() as $planet) {
             try {
                 $planet->updateBuildingQueue(true);
@@ -165,8 +206,6 @@ class ProcessBots extends Command
      */
     private function handleTradeAction(BotService $bot): bool
     {
-        // For now, just return false as trade is not implemented
-        // Could be expanded to transport resources between bot's planets
-        return false;
+        return $bot->sendResourceTransport();
     }
 }

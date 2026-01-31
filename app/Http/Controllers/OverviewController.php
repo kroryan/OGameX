@@ -8,6 +8,7 @@ use Illuminate\Support\Facades\Date;
 use Illuminate\View\View;
 use OGame\Facades\AppUtil;
 use OGame\Models\Highscore;
+use OGame\Models\Bot;
 use OGame\Services\BuildingQueueService;
 use OGame\Services\HighscoreService;
 use OGame\Services\PlayerService;
@@ -90,6 +91,8 @@ class OverviewController extends OGameController
             return AppUtil::formatNumber(Highscore::where('player_id', $player->getId())->first()->general ?? 0);
         });
 
+        $bot = Bot::where('user_id', $player->getId())->first();
+
         return view('ingame.overview.index')->with([
             'header_filename' => $planet->isMoon() ? 'moon/' . $planet->getPlanetImageType() : $planet->getPlanetBiomeType(),
             'planet_name' => $planet->getPlanetName(),
@@ -115,6 +118,7 @@ class OverviewController extends OGameController
             'other_planet' => $other_planet,
             'wreck_field' => $wreckField,
             'show_wreck_field_icon' => $showWreckFieldIcon,
+            'bot' => $bot,
         ]);
     }
 }

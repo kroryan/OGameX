@@ -185,6 +185,26 @@ If the relocation is successful, you will be charged 240.000 Dark Matter. The pl
                             <span class="planetMoveOverviewGivUpLink">@lang('Abandon/Rename')</span>
                             <span class="planetMoveIcons settings planetMoveGiveUp icon"></span>
                         </a>
+
+                        <div class="float_right" style="margin-right: 10px;">
+                            <form action="{{ route('options.save') }}" method="post" style="display: inline;">
+                                {{ csrf_field() }}
+                                <input type="hidden" name="bot_mode_present" value="1">
+                                <input type="hidden" name="bot_personality" value="{{ $bot ? $bot->personality : 'balanced' }}">
+                                <input type="hidden" name="bot_target_type" value="{{ $bot ? $bot->priority_target_type : 'random' }}">
+                                <input type="hidden" name="bot_max_fleets_sent" value="{{ $bot ? $bot->max_fleets_sent : 3 }}">
+                                @if ($bot && $bot->is_active)
+                                    <input type="hidden" name="bot_mode_enabled" value="0">
+                                    <button type="submit" class="btn_blue" style="padding: 4px 8px;">Disable Bot Mode</button>
+                                @else
+                                    <input type="hidden" name="bot_mode_enabled" value="1">
+                                    <button type="submit" class="btn_blue" style="padding: 4px 8px;">Enable Bot Mode</button>
+                                @endif
+                            </form>
+                            @if ($bot)
+                                <a href="{{ route('bot.logs') }}" class="btn_blue" style="padding: 4px 8px; margin-left: 6px; text-decoration: none;">Bot Logs</a>
+                            @endif
+                        </div>
                     </div>
                 </div>
             </div>

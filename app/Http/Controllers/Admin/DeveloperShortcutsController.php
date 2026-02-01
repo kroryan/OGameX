@@ -298,80 +298,54 @@ class DeveloperShortcutsController extends OGameController
             return redirect()->back()->with('success', 'Queues cleared for current planet and player research.');
         } elseif ($request->has('reset_account_full')) {
             // Handle "Reset account to initial state"
-            // This completely resets the account to creation state
+            // This completely resets the account to creation state WITHOUT destroying planets
             $user = $playerService->getUser();
             $planets = $playerService->planets->all();
-            $homeworld = null;
 
-            // Clear all queues first
+            // Clear ALL queues first
             foreach ($planets as $planet) {
                 BuildingQueue::where('planet_id', $planet->getPlanetId())->delete();
                 UnitQueue::where('planet_id', $planet->getPlanetId())->delete();
             }
             ResearchQueue::whereIn('planet_id', $playerService->planets->allIds())->delete();
 
-            // Keep only the homeworld (planet_current), delete all others
-            // Only attempt to abandon planets if there's more than one
-            $planetsToDelete = [];
+            // Reset ALL planets (buildings, units, resources)
+            // Keep the planets themselves - just reset their content
             foreach ($planets as $planet) {
-                if ($planet->getPlanetId() === $user->planet_current) {
-                    $homeworld = $planet;
-                } else {
-                    $planetsToDelete[] = $planet->getPlanetId();
-                }
-            }
-
-            // Only delete planets if we have more than one (can't abandon the last planet)
-            if (count($planets) > 1 && !empty($planetsToDelete)) {
-                foreach ($planetsToDelete as $planetId) {
-                    $planetModel = \OGame\Models\Planet::find($planetId);
-                    if ($planetModel) {
-                        // Mark as destroyed instead of using abandonPlanet()
-                        // abandonPlanet() has protection against deleting the last planet
-                        $planetModel->destroyed = 1;
-                        $planetModel->destroyed_moon_id = null;
-                        $planetModel->save();
-
-                        // Clear queues for this planet
-                        BuildingQueue::where('planet_id', $planetId)->delete();
-                        UnitQueue::where('planet_id', $planetId)->delete();
-                        ResearchQueue::where('planet_id', $planetId)->delete();
-                    }
-                }
-            }
-
-            // Reset the homeworld (or only planet)
-            if ($homeworld) {
-                // Reset all buildings on homeworld
+                // Reset all buildings to level 0
                 foreach (ObjectService::getBuildingObjects() as $building) {
-                    $homeworld->setObjectLevel($building->id, 0);
+                    $planet->setObjectLevel($building->id, 0);
                 }
                 foreach (ObjectService::getStationObjects() as $building) {
-                    $homeworld->setObjectLevel($building->id, 0);
+                    $planet->setObjectLevel($building->id, 0);
                 }
 
-                // Reset all units on homeworld
+                // Remove all units
                 foreach (ObjectService::getUnitObjects() as $unit) {
-                    $currentAmount = $homeworld->getObjectAmount($unit->machine_name);
+                    $currentAmount = $planet->getObjectAmount($unit->machine_name);
                     if ($currentAmount > 0) {
-                        $homeworld->removeUnit($unit->machine_name, $currentAmount);
+                        $planet->removeUnit($unit->machine_name, $currentAmount);
                     }
                 }
 
                 // Reset resources to starting values
-                $homeworld->setResources(new Resources(
+                $planet->setResources(new Resources(
                     metal: 500,
                     crystal: 500,
                     deuterium: 0,
                     energy: 0
                 ));
 
-                // Reset planet name to Homeworld
-                $homeworld->setName('Homeworld');
-                $homeworld->save();
+                // Save the planet
+                $planet->save();
             }
 
-            // Reset all research
+            // Set first planet as current if not set
+            if (empty($user->planet_current) && count($planets) > 0) {
+                $user->planet_current = $planets[0]->getPlanetId();
+            }
+
+            // Reset all research to level 0
             foreach (ObjectService::getResearchObjects() as $research) {
                 $playerService->setResearchLevel($research->machine_name, 0);
             }
@@ -382,7 +356,7 @@ class DeveloperShortcutsController extends OGameController
             $user->character_class_changed_at = null;
             $user->save();
 
-            return redirect()->back()->with('success', 'Account has been reset to initial state. Only homeworld remains with starting resources.');
+            return redirect()->back()->with('success', 'Account has been reset to initial state. All planets have been reset with starting resources.');
         }
 
         // Handle unit submission

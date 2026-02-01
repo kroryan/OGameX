@@ -105,6 +105,12 @@ return [
     // Auto-recycle debris after own attacks
     'auto_recycle_after_attack' => true,
 
+    // System 2: DM Halving - minimum DM balance to consider halving
+    'min_dm_for_halving' => 5000,
+
+    // System 7: Debris harvesting range (systems)
+    'debris_harvest_range' => 20,
+
     // Maximum percentage of units to send in an attack (bot keeps rest for defense)
     'attack_fleet_percentage' => [
         'aggressive' => 0.9,

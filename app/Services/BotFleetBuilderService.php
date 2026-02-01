@@ -78,6 +78,17 @@ class BotFleetBuilderService
             $fleet->addUnit(ObjectService::getUnitObjectByMachineName('recycler'), $sendRecyclers);
         }
 
+        // System 1: General class gets -50% fuel, so send more ships
+        try {
+            $classBonuses = $bot->getClassBonuses();
+            if (!empty($classBonuses['fuel_reduction']) && $classBonuses['fuel_reduction'] < 1.0) {
+                // General class: can afford more ships due to reduced fuel
+                $attackPercentage = min(0.95, $attackPercentage * 1.15);
+            }
+        } catch (\Exception $e) {
+            // Non-critical
+        }
+
         // ALL personalities bring cargo ships for loot (critical for ROI)
         $largeCargo = $availableUnits->getAmountByMachineName('large_cargo');
         $smallCargo = $availableUnits->getAmountByMachineName('small_cargo');
@@ -127,6 +138,16 @@ class BotFleetBuilderService
         // Explorers send bigger expedition fleets
         if ($personality === BotPersonality::EXPLORER) {
             $fleetPercentage = min(0.6, $fleetPercentage * 1.5);
+        }
+
+        // System 1: Discoverer class gets 1.5x expedition resources, send bigger fleets
+        try {
+            $classBonuses = $bot->getClassBonuses();
+            if (!empty($classBonuses['expedition_resources']) && $classBonuses['expedition_resources'] > 1.0) {
+                $fleetPercentage = min(0.6, $fleetPercentage * 1.2);
+            }
+        } catch (\Exception $e) {
+            // Non-critical
         }
 
         $fleetPercentage = max(0.05, min(0.6, $fleetPercentage));

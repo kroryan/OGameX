@@ -297,4 +297,30 @@ class BotTargetFinderService
         return $resources->metal + $resources->crystal + $resources->deuterium +
                ($production->metal->production + $production->crystal->production + $production->deuterium->production) * 24;
     }
+
+    /**
+     * System 12: Filter targets by highscore relative to bot's score.
+     * Returns the maximum score a target should have based on bot's own score.
+     */
+    public function getHighscoreFilteredMaxScore(BotService $bot): ?int
+    {
+        try {
+            $context = $bot->getHighscoreContext();
+            $botScore = $context['score'] ?? 0;
+
+            if ($botScore <= 0) {
+                return null;
+            }
+
+            // Allow attacking players up to 1.5x our score
+            $modifiers = $bot->getHighscoreStrategyModifiers();
+            $attackMod = $modifiers['attack_modifier'] ?? 1.0;
+
+            // More aggressive bots target stronger players
+            $ratio = 1.2 + ($attackMod - 1.0) * 0.5;
+            return (int) ($botScore * $ratio);
+        } catch (\Exception $e) {
+            return null;
+        }
+    }
 }

@@ -143,9 +143,46 @@ class ProcessBots extends Command
             $intel = new BotIntelligenceService();
             if ($intel->detectEspionage($bot)) {
                 $this->line('  - Detected incoming espionage!');
+                // System 8: Counter-espionage response
+                if ($bot->handleCounterEspionage()) {
+                    $this->line('  - Counter-espionage response: built ABMs');
+                }
             }
         } catch (\Exception $e) {
             // Non-critical
+        }
+
+        // System 3: Wreck Field Auto-Repair (check every tick)
+        try {
+            if ($bot->tryCompleteWreckFieldRepairs()) {
+                $this->line('  - Wreck field repairs completed');
+            }
+            if ($bot->tryRepairWreckFields()) {
+                $this->line('  - Started wreck field repairs');
+            }
+        } catch (\Exception $e) {
+            // Non-critical
+        }
+
+        // System 4 & 5: Mission results analysis (every 3 ticks)
+        if (mt_rand(1, 3) === 1) {
+            try {
+                $bot->analyzeCompletedMissions();
+                $bot->analyzeCompletedExpeditions();
+            } catch (\Exception $e) {
+                // Non-critical
+            }
+        }
+
+        // System 2: DM Halving for long queues (15% chance per tick)
+        if (mt_rand(1, 7) === 1) {
+            try {
+                if ($bot->tryHalveQueue()) {
+                    $this->line('  - DM halving executed');
+                }
+            } catch (\Exception $e) {
+                // Non-critical
+            }
         }
 
         // Moon infrastructure building (low frequency)
@@ -164,6 +201,39 @@ class ProcessBots extends Command
             try {
                 if ($bot->proactivePhalanxScan()) {
                     $this->line('  - Proactive phalanx scan executed');
+                }
+            } catch (\Exception $e) {
+                // Non-critical
+            }
+        }
+
+        // System 7: Systematic debris harvesting (10% chance)
+        if (mt_rand(1, 10) === 1) {
+            try {
+                if ($bot->harvestNearbyDebris()) {
+                    $this->line('  - Debris harvesting mission sent');
+                }
+            } catch (\Exception $e) {
+                // Non-critical
+            }
+        }
+
+        // System 10: Moon destruction (rare, 2% chance, late game only)
+        if (mt_rand(1, 50) === 1) {
+            try {
+                if ($bot->tryMoonDestruction()) {
+                    $this->line('  - Moon destruction mission launched');
+                }
+            } catch (\Exception $e) {
+                // Non-critical
+            }
+        }
+
+        // System 11: Proactive missile warfare (5% chance)
+        if (mt_rand(1, 20) === 1) {
+            try {
+                if ($bot->proactiveMissileWarfare()) {
+                    $this->line('  - Missile warfare action executed');
                 }
             } catch (\Exception $e) {
                 // Non-critical
@@ -278,6 +348,11 @@ class ProcessBots extends Command
             return true;
         }
 
+        // System 7: Try systematic debris harvesting first
+        if ($bot->harvestNearbyDebris()) {
+            return true;
+        }
+
         if ($bot->tryRecycleNearbyDebris()) {
             return true;
         }
@@ -322,6 +397,7 @@ class ProcessBots extends Command
 
     /**
      * Handle attack action with intelligence-based timing.
+     * Enhanced with Systems 4, 9, 11 integration.
      */
     private function handleAttackAction(BotService $bot): bool
     {
@@ -336,6 +412,21 @@ class ProcessBots extends Command
                 if (!$intel->isGoodTimeToAttack($botId, $targetUserId)) {
                     $bot->logAction(BotActionType::ATTACK, 'Delaying attack: target likely online', [], 'failed');
                     return false;
+                }
+
+                // System 12: Skip attack if target is much stronger (highscore check)
+                try {
+                    $botContext = $bot->getHighscoreContext();
+                    $targetHighscore = $target->getPlayer()->getUser()->highscore;
+                    if ($targetHighscore && $botContext['score'] > 0) {
+                        $scoreRatio = ($targetHighscore->general ?? 0) / max(1, $botContext['score']);
+                        if ($scoreRatio > 2.0) {
+                            $bot->logAction(BotActionType::ATTACK, 'Target too strong by highscore ratio', ['ratio' => round($scoreRatio, 2)], 'failed');
+                            return false;
+                        }
+                    }
+                } catch (\Exception $e) {
+                    // Non-critical
                 }
             }
         } catch (\Exception $e) {

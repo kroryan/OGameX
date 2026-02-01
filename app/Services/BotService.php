@@ -3523,4 +3523,867 @@ class BotService
         $targetFinder = app(BotTargetFinderService::class);
         return $targetFinder->findTarget($this, $this->bot->getTargetTypeEnum());
     }
+
+    // ========================================================================
+    // SYSTEM 1: Character Class-Aware Strategy
+    // ========================================================================
+
+    /**
+     * Get class-based bonuses for the bot's character class.
+     * Returns multipliers and flags that affect decision-making.
+     */
+    public function getClassBonuses(): array
+    {
+        $user = $this->player->getUser();
+        $class = CharacterClass::tryFrom($user->character_class ?? 0);
+
+        return match ($class) {
+            CharacterClass::COLLECTOR => [
+                'mine_production' => 1.25,
+                'transport_speed' => 2.0,
+                'transport_cargo' => 1.25,
+                'crawler_bonus' => 1.5,
+                'speedup_discount_type' => 'building',
+                'prefer_economy' => true,
+                'prefer_attacks' => false,
+                'prefer_expeditions' => false,
+            ],
+            CharacterClass::GENERAL => [
+                'combat_speed' => 2.0,
+                'fuel_reduction' => 0.5,
+                'extra_fleet_slots' => 2,
+                'extra_combat_research' => 2,
+                'reaper_debris' => 0.30,
+                'speedup_discount_type' => 'shipyard',
+                'prefer_economy' => false,
+                'prefer_attacks' => true,
+                'prefer_expeditions' => false,
+            ],
+            CharacterClass::DISCOVERER => [
+                'research_time' => 0.75,
+                'expedition_resources' => 1.5,
+                'planet_size' => 1.10,
+                'extra_expeditions' => 2,
+                'enemy_chance' => 0.5,
+                'phalanx_range' => 1.20,
+                'inactive_loot' => 0.75,
+                'speedup_discount_type' => 'research',
+                'prefer_economy' => false,
+                'prefer_attacks' => false,
+                'prefer_expeditions' => true,
+            ],
+            default => [
+                'prefer_economy' => false,
+                'prefer_attacks' => false,
+                'prefer_expeditions' => false,
+            ],
+        };
+    }
+
+    /**
+     * Get the bot's optimal class based on personality (for class-aware strategy).
+     */
+    public function getOptimalClassForPersonality(): CharacterClass
+    {
+        return match ($this->getPersonality()) {
+            BotPersonality::AGGRESSIVE, BotPersonality::RAIDER => CharacterClass::GENERAL,
+            BotPersonality::ECONOMIC, BotPersonality::DIPLOMAT => CharacterClass::COLLECTOR,
+            BotPersonality::SCIENTIST, BotPersonality::EXPLORER => CharacterClass::DISCOVERER,
+            BotPersonality::DEFENSIVE, BotPersonality::TURTLE => CharacterClass::GENERAL,
+            default => CharacterClass::DISCOVERER,
+        };
+    }
+
+    // ========================================================================
+    // SYSTEM 2: Dark Matter Halving (DM Speedup)
+    // ========================================================================
+
+    /**
+     * Try to halve the longest-running queue item using Dark Matter.
+     * Prioritizes based on class bonuses and strategic value.
+     */
+    public function tryHalveQueue(): bool
+    {
+        try {
+            $user = $this->player->getUser();
+            $dmBalance = $user->dark_matter;
+
+            // Only halve if we have significant DM reserves
+            $minDmForHalving = (int) config('bots.min_dm_for_halving', 5000);
+            if ($dmBalance < $minDmForHalving) {
+                return false;
+            }
+
+            // Find the longest running queue item
+            $bestCandidate = null;
+            $bestRemainingTime = 0;
+            $bestType = null;
+
+            // Check building queues
+            foreach ($this->player->planets->all() as $planet) {
+                $buildingQueue = \OGame\Models\BuildingQueue::where('planet_id', $planet->getPlanetId())
+                    ->where('processed', 0)
+                    ->where('canceled', 0)
+                    ->where('building', 1)
+                    ->first();
+
+                if ($buildingQueue) {
+                    $remaining = (int) $buildingQueue->time_end - now()->timestamp;
+                    if ($remaining > 300 && $remaining > $bestRemainingTime) { // > 5 min
+                        $bestCandidate = $buildingQueue;
+                        $bestRemainingTime = $remaining;
+                        $bestType = 'building';
+                    }
+                }
+            }
+
+            // Check research queue
+            $researchQueue = \OGame\Models\ResearchQueue::query()
+                ->join('planets', 'research_queues.planet_id', '=', 'planets.id')
+                ->where('planets.user_id', $user->id)
+                ->where('research_queues.processed', 0)
+                ->where('research_queues.canceled', 0)
+                ->where('research_queues.building', 1)
+                ->select('research_queues.*')
+                ->first();
+
+            if ($researchQueue) {
+                $remaining = (int) $researchQueue->time_end - now()->timestamp;
+                if ($remaining > 300 && $remaining > $bestRemainingTime) {
+                    $bestCandidate = $researchQueue;
+                    $bestRemainingTime = $remaining;
+                    $bestType = 'research';
+                }
+            }
+
+            if (!$bestCandidate || !$bestType) {
+                return false;
+            }
+
+            // Calculate cost
+            $halvingService = app(HalvingService::class);
+            $cost = $halvingService->calculateHalvingCost($bestRemainingTime, $bestType);
+
+            // Only spend if we can afford it with buffer
+            if ($dmBalance < $cost * 1.5) {
+                return false;
+            }
+
+            // Class discount awareness
+            $classBonuses = $this->getClassBonuses();
+            $discountType = $classBonuses['speedup_discount_type'] ?? null;
+            $isDiscountedType = ($discountType === $bestType);
+
+            // Prioritize halving items that match our class discount
+            if (!$isDiscountedType && $bestRemainingTime < 1800) {
+                return false; // Don't halve short items without discount
+            }
+
+            // Execute halving
+            if ($bestType === 'building') {
+                $planet = null;
+                foreach ($this->player->planets->all() as $p) {
+                    if ($p->getPlanetId() === (int) $bestCandidate->planet_id) {
+                        $planet = $p;
+                        break;
+                    }
+                }
+                if (!$planet) return false;
+                $result = $halvingService->halveBuilding($user, $bestCandidate->id, $planet);
+            } else {
+                $result = $halvingService->halveResearch($user, $bestCandidate->id, $this->player);
+            }
+
+            if (!empty($result['success'])) {
+                $this->logAction(BotActionType::BUILD, "DM halving ({$bestType}): saved " . (int)($bestRemainingTime / 2) . "s, cost {$result['cost']} DM", [
+                    'dm_cost' => $result['cost'],
+                    'time_saved' => (int)($bestRemainingTime / 2),
+                    'type' => $bestType,
+                ]);
+                return true;
+            }
+        } catch (Exception $e) {
+            logger()->debug("Bot {$this->bot->id}: tryHalveQueue failed: {$e->getMessage()}");
+        }
+
+        return false;
+    }
+
+    // ========================================================================
+    // SYSTEM 3: Wreck Field Auto-Repair
+    // ========================================================================
+
+    /**
+     * Check for and start repairs on wreck fields at bot's planets.
+     */
+    public function tryRepairWreckFields(): bool
+    {
+        try {
+            foreach ($this->player->planets->all() as $planet) {
+                $coords = $planet->getPlanetCoordinates();
+
+                $wreckFields = \OGame\Models\WreckField::where('galaxy', $coords->galaxy)
+                    ->where('system', $coords->system)
+                    ->where('planet', $coords->position)
+                    ->where('owner_player_id', $this->player->getId())
+                    ->where('status', 'active')
+                    ->get();
+
+                foreach ($wreckFields as $wreckField) {
+                    if ($wreckField->isExpired()) {
+                        continue;
+                    }
+
+                    $shipData = $wreckField->ship_data ?? [];
+                    if (empty($shipData)) {
+                        continue;
+                    }
+
+                    // Check if planet has space dock
+                    $spaceDockLevel = $planet->getObjectLevel('space_dock');
+                    if ($spaceDockLevel < 1) {
+                        continue;
+                    }
+
+                    // Start repairs
+                    $wreckFieldService = app(WreckFieldService::class);
+                    $wreckFieldService->loadOrCreateForCoordinates($coords);
+                    $loaded = $wreckFieldService->loadActiveOrBlockedForCoordinates($coords);
+                    if (!$loaded) {
+                        continue;
+                    }
+
+                    $wf = $wreckFieldService->getWreckField();
+                    if (!$wf || $wf->status !== 'active') {
+                        continue;
+                    }
+
+                    $wreckFieldService->startRepairs($spaceDockLevel);
+
+                    $totalShips = 0;
+                    foreach ($shipData as $ship) {
+                        $totalShips += $ship['quantity'] ?? 0;
+                    }
+
+                    $this->logAction(BotActionType::FLEET, "Started wreck field repair at {$coords->asString()}: {$totalShips} ships", [
+                        'space_dock_level' => $spaceDockLevel,
+                        'ships' => $totalShips,
+                    ]);
+
+                    return true;
+                }
+            }
+
+            return false;
+        } catch (Exception $e) {
+            logger()->debug("Bot {$this->bot->id}: tryRepairWreckFields failed: {$e->getMessage()}");
+            return false;
+        }
+    }
+
+    /**
+     * Complete wreck field repairs that are done.
+     */
+    public function tryCompleteWreckFieldRepairs(): bool
+    {
+        try {
+            foreach ($this->player->planets->all() as $planet) {
+                $coords = $planet->getPlanetCoordinates();
+
+                $repairing = \OGame\Models\WreckField::where('galaxy', $coords->galaxy)
+                    ->where('system', $coords->system)
+                    ->where('planet', $coords->position)
+                    ->where('owner_player_id', $this->player->getId())
+                    ->where('status', 'repairing')
+                    ->where('repair_completed_at', '<=', now())
+                    ->get();
+
+                foreach ($repairing as $wreckField) {
+                    $wreckFieldService = app(WreckFieldService::class);
+                    $wreckFieldService->loadForCoordinates($coords);
+                    $wf = $wreckFieldService->getWreckField();
+                    if (!$wf || $wf->id !== $wreckField->id) {
+                        continue;
+                    }
+
+                    $shipData = $wreckFieldService->completeRepairs();
+                    $totalRecovered = 0;
+                    foreach ($shipData as $ship) {
+                        $totalRecovered += $ship['quantity'] ?? 0;
+                    }
+
+                    $this->logAction(BotActionType::FLEET, "Wreck field repair completed at {$coords->asString()}: recovered {$totalRecovered} ships", []);
+                    return true;
+                }
+            }
+
+            return false;
+        } catch (Exception $e) {
+            logger()->debug("Bot {$this->bot->id}: tryCompleteWreckFieldRepairs failed: {$e->getMessage()}");
+            return false;
+        }
+    }
+
+    // ========================================================================
+    // SYSTEM 4: Mission Results Analysis (Learn from battle outcomes)
+    // ========================================================================
+
+    /**
+     * Analyze completed attack missions and learn from outcomes.
+     * Updates intel, threat maps, and avoid lists based on results.
+     */
+    public function analyzeCompletedMissions(): void
+    {
+        try {
+            $userId = $this->player->getId();
+            $cacheKey = "bot:{$this->bot->id}:last_mission_analysis";
+            $lastAnalysis = cache()->get($cacheKey, 0);
+
+            // Get recently completed attack missions
+            $missions = FleetMission::where('user_id', $userId)
+                ->where('processed', 1)
+                ->where('mission_type', 1) // Attack
+                ->where('time_arrival', '>', $lastAnalysis)
+                ->orderBy('time_arrival')
+                ->limit(10)
+                ->get();
+
+            if ($missions->isEmpty()) {
+                return;
+            }
+
+            $intel = new BotIntelligenceService();
+
+            foreach ($missions as $mission) {
+                // Check battle report for this mission
+                $targetUserId = null;
+                $targetPlanet = Planet::where('galaxy', $mission->galaxy_to)
+                    ->where('system', $mission->system_to)
+                    ->where('planet', $mission->position_to)
+                    ->first();
+
+                if ($targetPlanet) {
+                    $targetUserId = $targetPlanet->user_id;
+                }
+
+                // Analyze loot vs cost
+                $lootMetal = $mission->metal ?? 0;
+                $lootCrystal = $mission->crystal ?? 0;
+                $lootDeuterium = $mission->deuterium ?? 0;
+                $totalLoot = $lootMetal + $lootCrystal + $lootDeuterium;
+
+                $won = $totalLoot > 0;
+
+                // Record threat interaction
+                if ($targetUserId) {
+                    $intel->recordThreatInteraction($this->bot->id, $targetUserId, 'our_attack', $won);
+
+                    // If we got zero loot and they were online, avoid them
+                    if (!$won) {
+                        $this->addAvoidTargetUserId($targetUserId);
+                    }
+                }
+
+                // Learn profitability for future targeting
+                if ($won && $targetUserId) {
+                    // Good target - refresh intel
+                    cache()->put("bot:{$this->bot->id}:good_target:{$targetUserId}", [
+                        'loot' => $totalLoot,
+                        'ts' => now()->timestamp,
+                    ], now()->addHours(24));
+                }
+            }
+
+            cache()->put($cacheKey, now()->timestamp, now()->addHours(24));
+        } catch (Exception $e) {
+            logger()->debug("Bot {$this->bot->id}: analyzeCompletedMissions failed: {$e->getMessage()}");
+        }
+    }
+
+    /**
+     * Analyze completed expedition missions for DM/resource tracking.
+     */
+    public function analyzeCompletedExpeditions(): void
+    {
+        try {
+            $userId = $this->player->getId();
+            $cacheKey = "bot:{$this->bot->id}:last_expedition_analysis";
+            $lastAnalysis = cache()->get($cacheKey, 0);
+
+            $missions = FleetMission::where('user_id', $userId)
+                ->where('processed', 1)
+                ->where('mission_type', 15) // Expedition
+                ->where('time_arrival', '>', $lastAnalysis)
+                ->orderBy('time_arrival')
+                ->limit(10)
+                ->get();
+
+            if ($missions->isEmpty()) {
+                return;
+            }
+
+            $totalLoot = 0;
+            $totalFuel = 0;
+            $expeditionCount = $missions->count();
+
+            foreach ($missions as $mission) {
+                $loot = ($mission->metal ?? 0) + ($mission->crystal ?? 0) + ($mission->deuterium ?? 0);
+                $totalLoot += $loot;
+                $totalFuel += $mission->fuel_consumption ?? 0;
+            }
+
+            // Track expedition ROI for adaptive strategy
+            $roi = $totalFuel > 0 ? ($totalLoot / $totalFuel) : 0;
+            cache()->put("bot:{$this->bot->id}:expedition_roi", [
+                'roi' => $roi,
+                'count' => $expeditionCount,
+                'total_loot' => $totalLoot,
+                'total_fuel' => $totalFuel,
+                'ts' => now()->timestamp,
+            ], now()->addHours(24));
+
+            cache()->put($cacheKey, now()->timestamp, now()->addHours(24));
+        } catch (Exception $e) {
+            logger()->debug("Bot {$this->bot->id}: analyzeCompletedExpeditions failed: {$e->getMessage()}");
+        }
+    }
+
+    // ========================================================================
+    // SYSTEM 7: Systematic Debris Harvesting
+    // ========================================================================
+
+    /**
+     * Find and collect debris fields systematically across nearby systems.
+     */
+    public function harvestNearbyDebris(): bool
+    {
+        if (!$this->hasFleetSlotsAvailable()) {
+            return false;
+        }
+
+        try {
+            $source = $this->getFleetPlanet() ?? $this->getRichestPlanet();
+            if ($source === null) {
+                return false;
+            }
+
+            $recyclers = $source->getObjectAmount('recycler');
+            if ($recyclers < 1) {
+                return false;
+            }
+
+            $coords = $source->getPlanetCoordinates();
+            $range = (int) config('bots.debris_harvest_range', 20);
+
+            // Find all debris fields in range, sorted by value
+            $fields = \OGame\Models\DebrisField::where('galaxy', $coords->galaxy)
+                ->whereBetween('system', [max(1, $coords->system - $range), $coords->system + $range])
+                ->whereRaw('(metal + crystal + deuterium) > ?', [3000])
+                ->orderByRaw('(metal + crystal + deuterium) DESC')
+                ->limit(5)
+                ->get();
+
+            if ($fields->isEmpty()) {
+                return false;
+            }
+
+            foreach ($fields as $field) {
+                $totalValue = $field->metal + $field->crystal + $field->deuterium;
+                $targetCoords = new \OGame\Models\Planet\Coordinate($field->galaxy, $field->system, $field->planet);
+
+                // Calculate how many recyclers we need
+                $recyclerCapacity = 20000; // Standard recycler cargo
+                $classBonuses = $this->getClassBonuses();
+                if (!empty($classBonuses['transport_cargo'])) {
+                    $recyclerCapacity = (int) ($recyclerCapacity * $classBonuses['transport_cargo']);
+                }
+
+                $neededRecyclers = max(1, (int) ceil($totalValue / $recyclerCapacity));
+                $sendRecyclers = min($neededRecyclers, $recyclers, 30);
+
+                $fleet = new \OGame\GameObjects\Models\Units\UnitCollection();
+                $fleet->addUnit(ObjectService::getUnitObjectByMachineName('recycler'), $sendRecyclers);
+
+                $fleetMissionService = app(FleetMissionService::class);
+                $consumption = $fleetMissionService->calculateConsumption($source, $fleet, $targetCoords, 8, 100);
+
+                // ROI check: debris value must exceed fuel cost
+                if ($consumption > $totalValue * 0.5) {
+                    continue;
+                }
+
+                if ($source->getResources()->deuterium->get() < $consumption) {
+                    continue;
+                }
+
+                $fleetMissionService->createNewFromPlanet(
+                    $source,
+                    $targetCoords,
+                    \OGame\Models\Enums\PlanetType::DebrisField,
+                    8,
+                    $fleet,
+                    new Resources(0, 0, 0, 0),
+                    100,
+                    0
+                );
+
+                $this->logAction(BotActionType::FLEET, "Debris harvest to {$targetCoords->asString()}: value={$totalValue}", [
+                    'recyclers' => $sendRecyclers,
+                    'value' => $totalValue,
+                ]);
+
+                return true;
+            }
+
+            return false;
+        } catch (Exception $e) {
+            logger()->debug("Bot {$this->bot->id}: harvestNearbyDebris failed: {$e->getMessage()}");
+            return false;
+        }
+    }
+
+    // ========================================================================
+    // SYSTEM 8: Counter-Espionage Calculation
+    // ========================================================================
+
+    /**
+     * Calculate our counter-espionage strength and respond to probes.
+     * Builds ABM when being heavily scouted.
+     */
+    public function handleCounterEspionage(): bool
+    {
+        try {
+            $espionageCounter = $this->bot->espionage_counter ?? 0;
+            if ($espionageCounter < 3) {
+                return false;
+            }
+
+            // Build ABM if being scouted heavily
+            foreach ($this->player->planets->all() as $planet) {
+                $siloLevel = $planet->getObjectLevel('missile_silo');
+                if ($siloLevel < 1) {
+                    continue;
+                }
+
+                $abmCount = $planet->getObjectAmount('anti_ballistic_missile');
+                $ipmCount = $planet->getObjectAmount('interplanetary_missile');
+                $maxMissiles = $siloLevel * 10;
+                $currentMissiles = $abmCount + $ipmCount;
+
+                if ($currentMissiles >= $maxMissiles) {
+                    continue;
+                }
+
+                // Need more ABM
+                $targetAbm = max(0, (int)($maxMissiles * 0.6) - $abmCount);
+                if ($targetAbm < 1) {
+                    continue;
+                }
+
+                $buildAmount = min($targetAbm, 5);
+                if (!ObjectService::objectRequirementsMet('anti_ballistic_missile', $planet)) {
+                    continue;
+                }
+
+                $price = ObjectService::getObjectPrice('anti_ballistic_missile', $planet);
+                $resources = $planet->getResources();
+                $maxAffordable = min(
+                    $price->metal->get() > 0 ? (int)($resources->metal->get() / $price->metal->get()) : 999,
+                    $price->crystal->get() > 0 ? (int)($resources->crystal->get() / $price->crystal->get()) : 999,
+                    $price->deuterium->get() > 0 ? (int)($resources->deuterium->get() / $price->deuterium->get()) : 999,
+                    $buildAmount
+                );
+
+                if ($maxAffordable < 1) {
+                    continue;
+                }
+
+                if ($this->isUnitQueueFull($planet)) {
+                    continue;
+                }
+
+                $queueService = app(UnitQueueService::class);
+                $abm = ObjectService::getObjectByMachineName('anti_ballistic_missile');
+                $queueService->add($planet, $abm->id, $maxAffordable);
+
+                $this->logAction(BotActionType::DEFENSE, "Counter-espionage: built {$maxAffordable}x ABM on {$planet->getPlanetName()}", [
+                    'espionage_counter' => $espionageCounter,
+                ]);
+
+                // Reset counter
+                $this->bot->espionage_counter = 0;
+                $this->bot->save();
+                return true;
+            }
+
+            return false;
+        } catch (Exception $e) {
+            logger()->debug("Bot {$this->bot->id}: handleCounterEspionage failed: {$e->getMessage()}");
+            return false;
+        }
+    }
+
+    // ========================================================================
+    // SYSTEM 10: Moon Destruction (Deathstar RIP Strategy)
+    // ========================================================================
+
+    /**
+     * Attempt to destroy enemy moon using Deathstars.
+     * Only targets dangerous players who have phalanx on their moons.
+     */
+    public function tryMoonDestruction(): bool
+    {
+        try {
+            if (!$this->hasFleetSlotsAvailable()) {
+                return false;
+            }
+
+            $source = $this->getFleetPlanet() ?? $this->getRichestPlanet();
+            if ($source === null) {
+                return false;
+            }
+
+            // Need deathstars
+            $deathstars = $source->getObjectAmount('deathstar');
+            if ($deathstars < 1) {
+                return false;
+            }
+
+            // Only target dangerous players (from threat map)
+            $intel = new BotIntelligenceService();
+            $threatMap = $intel->getThreatMap($this->bot->id);
+
+            foreach ($threatMap as $threat) {
+                if ($threat->threat_score < 50) {
+                    continue; // Only target serious threats
+                }
+
+                // Find their moon
+                $enemyPlanets = Planet::where('user_id', $threat->threat_user_id)
+                    ->where('destroyed', 0)
+                    ->get();
+
+                foreach ($enemyPlanets as $enemyPlanet) {
+                    // Check if planet has a moon
+                    $moon = Planet::where('galaxy', $enemyPlanet->galaxy)
+                        ->where('system', $enemyPlanet->system)
+                        ->where('planet', $enemyPlanet->planet)
+                        ->where('planet_type', 3) // Moon
+                        ->where('destroyed', 0)
+                        ->first();
+
+                    if (!$moon) {
+                        continue;
+                    }
+
+                    $targetCoords = new \OGame\Models\Planet\Coordinate($moon->galaxy, $moon->system, $moon->planet);
+                    $fleet = new \OGame\GameObjects\Models\Units\UnitCollection();
+                    $fleet->addUnit(ObjectService::getUnitObjectByMachineName('deathstar'), min($deathstars, 3));
+
+                    $fleetMissionService = app(FleetMissionService::class);
+                    $consumption = $fleetMissionService->calculateConsumption($source, $fleet, $targetCoords, 9, 100);
+
+                    if ($source->getResources()->deuterium->get() < $consumption) {
+                        continue;
+                    }
+
+                    $fleetMissionService->createNewFromPlanet(
+                        $source,
+                        $targetCoords,
+                        \OGame\Models\Enums\PlanetType::Moon,
+                        9, // Moon destruction
+                        $fleet,
+                        new Resources(0, 0, 0, 0),
+                        100,
+                        0
+                    );
+
+                    $this->logAction(BotActionType::ATTACK, "Moon destruction mission to {$targetCoords->asString()}", [
+                        'deathstars' => min($deathstars, 3),
+                        'target_user_id' => $threat->threat_user_id,
+                    ]);
+
+                    return true;
+                }
+            }
+
+            return false;
+        } catch (Exception $e) {
+            logger()->debug("Bot {$this->bot->id}: tryMoonDestruction failed: {$e->getMessage()}");
+            return false;
+        }
+    }
+
+    // ========================================================================
+    // SYSTEM 11: Missile Warfare Strategy (Proactive IPM/ABM)
+    // ========================================================================
+
+    /**
+     * Proactive missile warfare: launch IPMs at heavily defended targets
+     * to soften them before attack. Build ABMs on vulnerable planets.
+     */
+    public function proactiveMissileWarfare(): bool
+    {
+        try {
+            // Part 1: Build ABMs on undefended planets
+            $builtAbm = false;
+            foreach ($this->player->planets->all() as $planet) {
+                $siloLevel = $planet->getObjectLevel('missile_silo');
+                if ($siloLevel < 1) continue;
+
+                $abmCount = $planet->getObjectAmount('anti_ballistic_missile');
+                $ipmCount = $planet->getObjectAmount('interplanetary_missile');
+                $maxMissiles = $siloLevel * 10;
+                $currentMissiles = $abmCount + $ipmCount;
+
+                // Ensure at least 40% ABM coverage
+                $targetAbm = (int)($maxMissiles * 0.4);
+                if ($abmCount >= $targetAbm || $currentMissiles >= $maxMissiles) {
+                    continue;
+                }
+
+                $buildAmount = min($targetAbm - $abmCount, 3, $maxMissiles - $currentMissiles);
+                if ($buildAmount < 1) continue;
+
+                if (!ObjectService::objectRequirementsMet('anti_ballistic_missile', $planet)) continue;
+                if ($this->isUnitQueueFull($planet)) continue;
+
+                $price = ObjectService::getObjectPrice('anti_ballistic_missile', $planet);
+                $resources = $planet->getResources();
+                $affordable = min(
+                    $price->metal->get() > 0 ? (int)($resources->metal->get() / $price->metal->get()) : 999,
+                    $price->crystal->get() > 0 ? (int)($resources->crystal->get() / $price->crystal->get()) : 999,
+                    $price->deuterium->get() > 0 ? (int)($resources->deuterium->get() / $price->deuterium->get()) : 999,
+                    $buildAmount
+                );
+
+                if ($affordable < 1) continue;
+
+                $queueService = app(UnitQueueService::class);
+                $abm = ObjectService::getObjectByMachineName('anti_ballistic_missile');
+                $queueService->add($planet, $abm->id, $affordable);
+                $this->logAction(BotActionType::DEFENSE, "Proactive ABM: {$affordable}x on {$planet->getPlanetName()}", []);
+                $builtAbm = true;
+                break;
+            }
+
+            if ($builtAbm) return true;
+
+            // Part 2: Launch IPMs at heavily defended targets before attack
+            if (!$this->hasFleetSlotsAvailable()) return false;
+
+            $source = $this->getRichestPlanet();
+            if (!$source) return false;
+
+            $ipm = $source->getObjectAmount('interplanetary_missile');
+            if ($ipm < 3) return false; // Need at least 3 to be effective
+
+            // Find a target with heavy defenses that we plan to attack
+            $intel = new BotIntelligenceService();
+            $targets = $intel->getProfitableTargets($this->bot->id, 3, $this->getAvoidTargetUserIds());
+
+            foreach ($targets as $target) {
+                $defenses = $target->defenses ?? [];
+                $heavyDefenses = ($defenses['plasma_turret'] ?? 0) + ($defenses['gauss_cannon'] ?? 0) + ($defenses['ion_cannon'] ?? 0);
+
+                if ($heavyDefenses < 5) continue; // Not worth missile attack
+
+                $targetCoords = new \OGame\Models\Planet\Coordinate($target->galaxy, $target->system, $target->planet);
+
+                // Check range
+                $range = $this->player->getMissileRange();
+                if ($source->getPlanetCoordinates()->galaxy !== $targetCoords->galaxy) continue;
+                $distance = abs($source->getPlanetCoordinates()->system - $targetCoords->system);
+                if ($distance > $range) continue;
+
+                $sendAmount = min($ipm, 10);
+                $fleet = new \OGame\GameObjects\Models\Units\UnitCollection();
+                $fleet->addUnit(ObjectService::getUnitObjectByMachineName('interplanetary_missile'), $sendAmount);
+
+                $fleetMissionService = app(FleetMissionService::class);
+                $fleetMissionService->createNewFromPlanet(
+                    $source,
+                    $targetCoords,
+                    \OGame\Models\Enums\PlanetType::Planet,
+                    10,
+                    $fleet,
+                    new Resources(0, 0, 0, 0),
+                    100,
+                    0
+                );
+
+                $this->logAction(BotActionType::ATTACK, "Proactive IPM to {$targetCoords->asString()}: {$sendAmount} missiles", [
+                    'heavy_defenses' => $heavyDefenses,
+                ]);
+
+                return true;
+            }
+
+            return false;
+        } catch (Exception $e) {
+            logger()->debug("Bot {$this->bot->id}: proactiveMissileWarfare failed: {$e->getMessage()}");
+            return false;
+        }
+    }
+
+    // ========================================================================
+    // SYSTEM 12: Highscore Awareness
+    // ========================================================================
+
+    /**
+     * Get the bot's current highscore rank and use it for targeting decisions.
+     */
+    public function getHighscoreContext(): array
+    {
+        try {
+            $highscore = $this->player->getUser()->highscore;
+            if (!$highscore) {
+                return ['rank' => 0, 'score' => 0, 'military_rank' => 0, 'economy_rank' => 0];
+            }
+
+            return [
+                'rank' => $highscore->general_rank ?? 0,
+                'score' => $highscore->general ?? 0,
+                'military_rank' => $highscore->military_rank ?? 0,
+                'military_score' => $highscore->military ?? 0,
+                'economy_rank' => $highscore->economy_rank ?? 0,
+                'economy_score' => $highscore->economy ?? 0,
+                'research_rank' => $highscore->research_rank ?? 0,
+                'research_score' => $highscore->research ?? 0,
+            ];
+        } catch (Exception $e) {
+            return ['rank' => 0, 'score' => 0, 'military_rank' => 0, 'economy_rank' => 0];
+        }
+    }
+
+    /**
+     * Adjust strategy based on highscore position.
+     * Top players should be more defensive, lower-ranked more aggressive for growth.
+     */
+    public function getHighscoreStrategyModifiers(): array
+    {
+        $context = $this->getHighscoreContext();
+        $rank = $context['rank'] ?? 0;
+        $totalPlayers = \OGame\Models\User::count();
+
+        if ($rank <= 0 || $totalPlayers <= 0) {
+            return ['attack_modifier' => 1.0, 'defense_modifier' => 1.0, 'economy_modifier' => 1.0];
+        }
+
+        $percentile = ($rank / $totalPlayers) * 100; // Lower = better rank
+
+        if ($percentile <= 10) {
+            // Top 10%: be more defensive, protect rank
+            return ['attack_modifier' => 0.7, 'defense_modifier' => 1.5, 'economy_modifier' => 1.2];
+        } elseif ($percentile <= 30) {
+            // Top 30%: balanced
+            return ['attack_modifier' => 1.0, 'defense_modifier' => 1.2, 'economy_modifier' => 1.0];
+        } elseif ($percentile <= 60) {
+            // Mid range: aggressive growth
+            return ['attack_modifier' => 1.3, 'defense_modifier' => 0.8, 'economy_modifier' => 1.3];
+        } else {
+            // Bottom: very aggressive, need to catch up
+            return ['attack_modifier' => 1.5, 'defense_modifier' => 0.6, 'economy_modifier' => 1.5];
+        }
+    }
 }

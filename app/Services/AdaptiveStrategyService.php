@@ -83,6 +83,47 @@ class AdaptiveStrategyService
             $changed = true;
         }
 
+        // System 1: Class-aware adaptation
+        try {
+            $classBonuses = $botService->getClassBonuses();
+            if (!empty($classBonuses['prefer_economy'])) {
+                // Collector: boost build and trade
+                $actionProbs['build'] = min(60, ($actionProbs['build'] ?? 30) + 3);
+                $actionProbs['trade'] = min(20, ($actionProbs['trade'] ?? 5) + 2);
+                $changed = true;
+            } elseif (!empty($classBonuses['prefer_attacks'])) {
+                // General: boost attack and fleet
+                $actionProbs['attack'] = min(40, ($actionProbs['attack'] ?? 20) + 3);
+                $actionProbs['fleet'] = min(40, ($actionProbs['fleet'] ?? 25) + 2);
+                $changed = true;
+            } elseif (!empty($classBonuses['prefer_expeditions'])) {
+                // Discoverer: boost fleet (expeditions) and research
+                $actionProbs['fleet'] = min(40, ($actionProbs['fleet'] ?? 25) + 3);
+                $actionProbs['research'] = min(40, ($actionProbs['research'] ?? 25) + 3);
+                $changed = true;
+            }
+        } catch (\Exception $e) {
+            // Non-critical
+        }
+
+        // System 12: Highscore-aware adaptation
+        try {
+            $hsModifiers = $botService->getHighscoreStrategyModifiers();
+            if ($hsModifiers['attack_modifier'] > 1.2) {
+                // Lower ranked: more aggressive
+                $actionProbs['attack'] = min(40, ($actionProbs['attack'] ?? 20) + 3);
+                $actionProbs['fleet'] = min(40, ($actionProbs['fleet'] ?? 25) + 2);
+                $changed = true;
+            } elseif ($hsModifiers['defense_modifier'] > 1.2) {
+                // Top ranked: more defensive
+                $actionProbs['defense'] = min(25, ($actionProbs['defense'] ?? 10) + 3);
+                $actionProbs['build'] = min(60, ($actionProbs['build'] ?? 30) + 2);
+                $changed = true;
+            }
+        } catch (\Exception $e) {
+            // Non-critical
+        }
+
         if ($changed) {
             Cache::put("bot:{$botId}:adaptive_economy", $economy, now()->addMinutes(60));
             Cache::put("bot:{$botId}:adaptive_action_probs", $actionProbs, now()->addMinutes(60));

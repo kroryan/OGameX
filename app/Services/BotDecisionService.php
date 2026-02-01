@@ -389,6 +389,12 @@ class BotDecisionService
         $score += $this->getRoiBonus($action, $state);
         $score -= $this->getRiskPenalty($action, $state);
 
+        // System 1: Character class-aware scoring
+        $score *= $this->getClassBonusModifier($action);
+
+        // System 12: Highscore-aware scoring
+        $score *= $this->getHighscoreModifier($action);
+
         return max(1.0, $score);
     }
 
@@ -786,7 +792,78 @@ class BotDecisionService
     }
 
     /**
+     * System 1: Get class-based scoring modifier.
+     * Leverages character class bonuses to weight actions optimally.
+     */
+    private function getClassBonusModifier(BotActionType $action): float
+    {
+        try {
+            $classBonuses = $this->botService->getClassBonuses();
+        } catch (\Exception $e) {
+            return 1.0;
+        }
+
+        // Collector: prefer economy (BUILD, TRADE)
+        if (!empty($classBonuses['prefer_economy'])) {
+            return match ($action) {
+                BotActionType::BUILD => 1.3,    // +25% mine production = build more mines
+                BotActionType::TRADE => 1.4,    // +100% transport speed = trade more
+                BotActionType::FLEET => 1.1,    // Cargo bonus helps fleet actions
+                BotActionType::ATTACK => 0.7,   // Not combat-focused
+                default => 1.0,
+            };
+        }
+
+        // General: prefer attacks and fleet (ATTACK, FLEET)
+        if (!empty($classBonuses['prefer_attacks'])) {
+            return match ($action) {
+                BotActionType::ATTACK => 1.5,   // +100% combat speed, -50% fuel
+                BotActionType::FLEET => 1.3,    // Fleet-focused class
+                BotActionType::DEFENSE => 1.1,  // General still values defense
+                BotActionType::ESPIONAGE => 1.2, // Need intel for attacks
+                BotActionType::BUILD => 0.8,    // Less economy focus
+                default => 1.0,
+            };
+        }
+
+        // Discoverer: prefer expeditions and research (FLEET for expeditions, RESEARCH)
+        if (!empty($classBonuses['prefer_expeditions'])) {
+            return match ($action) {
+                BotActionType::FLEET => 1.4,     // 1.5x expedition resources
+                BotActionType::RESEARCH => 1.3,  // -25% research time
+                BotActionType::ESPIONAGE => 1.2, // Discoverer has phalanx bonus
+                BotActionType::ATTACK => 0.8,    // Not combat-focused
+                default => 1.0,
+            };
+        }
+
+        return 1.0;
+    }
+
+    /**
+     * System 12: Get highscore-aware scoring modifier.
+     * Adjusts strategy based on the bot's rank in the universe.
+     */
+    private function getHighscoreModifier(BotActionType $action): float
+    {
+        try {
+            $modifiers = $this->botService->getHighscoreStrategyModifiers();
+        } catch (\Exception $e) {
+            return 1.0;
+        }
+
+        return match ($action) {
+            BotActionType::ATTACK => $modifiers['attack_modifier'] ?? 1.0,
+            BotActionType::DEFENSE => $modifiers['defense_modifier'] ?? 1.0,
+            BotActionType::BUILD => $modifiers['economy_modifier'] ?? 1.0,
+            BotActionType::RESEARCH => $modifiers['economy_modifier'] ?? 1.0,
+            default => 1.0,
+        };
+    }
+
+    /**
      * Check if bot should perform expedition.
+     * System 5: Enhanced with expedition ROI tracking.
      */
     public function shouldDoExpedition(): bool
     {
@@ -799,11 +876,31 @@ class BotDecisionService
             $chance *= 2.5;
         }
 
+        // System 1: Discoverer class gets more expeditions
+        try {
+            $classBonuses = $this->botService->getClassBonuses();
+            if (!empty($classBonuses['prefer_expeditions'])) {
+                $chance *= 1.5;
+            }
+        } catch (\Exception $e) {
+            // Non-critical
+        }
+
         $state = $this->stateAnalyzer->analyzeCurrentState($this->botService);
         if ($state['game_phase'] === 'early') {
             $chance *= 0.5;
         } elseif ($state['game_phase'] === 'late') {
             $chance *= 1.5;
+        }
+
+        // System 5: Adjust based on expedition ROI history
+        $expeditionRoi = cache()->get("bot:{$bot->id}:expedition_roi");
+        if ($expeditionRoi && isset($expeditionRoi['roi'])) {
+            if ($expeditionRoi['roi'] > 3.0) {
+                $chance *= 1.3; // Good ROI, do more expeditions
+            } elseif ($expeditionRoi['roi'] < 1.0) {
+                $chance *= 0.7; // Poor ROI, do fewer
+            }
         }
 
         return mt_rand(1, 100) <= ($chance * 100);

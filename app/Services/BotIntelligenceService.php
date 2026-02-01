@@ -49,10 +49,15 @@ class BotIntelligenceService
             $data
         );
 
-        // Calculate profitability score
+        // Enhanced profitability scoring: loot potential / risk ratio
         $totalResources = $intel->getTotalResources();
         $totalDefense = $intel->fleet_power + $intel->defense_power;
-        $intel->profitability_score = max(0, $totalResources - ($totalDefense * 100));
+        // Lootable amount is ~50% of stored resources in OGame
+        $lootable = (int) ($totalResources * 0.5);
+        // Defense cost to overcome (weighted lower since partial losses)
+        $defenseCost = (int) ($totalDefense * 50);
+        // Profitability = expected loot - expected cost to overcome defenses
+        $intel->profitability_score = max(0, $lootable - $defenseCost);
         $intel->save();
 
         return $intel;
@@ -138,22 +143,29 @@ class BotIntelligenceService
         $minSystem = max(1, $system - $range);
         $maxSystem = $system + $range;
 
-        // Get planets in range that we haven't scouted recently
-        $knownPlanetIds = BotIntel::where('bot_id', $botId)
+        // Get coordinates we've already scouted recently (use galaxy/system/planet since target_planet_id may not be set)
+        $knownCoords = BotIntel::where('bot_id', $botId)
             ->where('galaxy', $galaxy)
             ->whereBetween('system', [$minSystem, $maxSystem])
             ->where('last_espionage_at', '>', now()->subHours(12))
-            ->pluck('target_planet_id')
+            ->get()
+            ->map(fn($i) => "{$i->galaxy}:{$i->system}:{$i->planet}")
             ->toArray();
 
-        return Planet::where('galaxy', $galaxy)
+        $planets = Planet::where('galaxy', $galaxy)
             ->whereBetween('system', [$minSystem, $maxSystem])
             ->where('destroyed', 0)
-            ->whereNotIn('id', $knownPlanetIds)
+            ->whereNotNull('user_id')
+            ->where('user_id', '>', 0)
             ->inRandomOrder()
-            ->limit(5)
-            ->get()
-            ->toArray();
+            ->limit(15)
+            ->get();
+
+        // Filter out already-scouted coordinates
+        return $planets->filter(function ($planet) use ($knownCoords) {
+            $key = "{$planet->galaxy}:{$planet->system}:{$planet->planet}";
+            return !in_array($key, $knownCoords);
+        })->take(5)->values()->toArray();
     }
 
     /**

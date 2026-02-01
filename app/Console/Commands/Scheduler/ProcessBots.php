@@ -148,6 +148,28 @@ class ProcessBots extends Command
             // Non-critical
         }
 
+        // Moon infrastructure building (low frequency)
+        if (mt_rand(1, 10) === 1) {
+            try {
+                if ($bot->buildMoonInfrastructure()) {
+                    $this->line('  - Built moon infrastructure');
+                }
+            } catch (\Exception $e) {
+                // Non-critical
+            }
+        }
+
+        // Proactive phalanx scanning (low frequency)
+        if (mt_rand(1, 15) === 1) {
+            try {
+                if ($bot->proactivePhalanxScan()) {
+                    $this->line('  - Proactive phalanx scan executed');
+                }
+            } catch (\Exception $e) {
+                // Non-critical
+            }
+        }
+
         // Threat response (event-driven)
         if ($bot->isUnderThreat()) {
             $this->handleThreatResponse($bot);
@@ -251,6 +273,11 @@ class ProcessBots extends Command
      */
     private function handleFleetAction(BotService $bot, BotDecisionService $decisionService): bool
     {
+        // First priority: recycle debris from previous attacks
+        if ($bot->tryRecycleAfterAttack()) {
+            return true;
+        }
+
         if ($bot->tryRecycleNearbyDebris()) {
             return true;
         }
@@ -372,61 +399,72 @@ class ProcessBots extends Command
     private function handleDefenseAction(BotService $bot): bool
     {
         try {
-            $planet = $bot->getRichestPlanet();
-            if (!$planet) {
+            $buildOnAll = config('bots.defense_all_planets', true);
+            $planets = $buildOnAll ? $bot->getPlayer()->planets->all() : [$bot->getRichestPlanet()];
+            $planets = array_filter($planets);
+
+            if (empty($planets)) {
                 return false;
             }
 
-            if ($bot->isUnitQueueFull($planet)) {
-                return false;
-            }
-
-            // Get buildable defense units
-            $defenses = \OGame\Services\ObjectService::getDefenseObjects();
-            $affordable = [];
-
-            foreach ($defenses as $defense) {
-                if (!\OGame\Services\ObjectService::objectRequirementsMet($defense->machine_name, $planet)) {
-                    continue;
-                }
-
-                $price = \OGame\Services\ObjectService::getObjectPrice($defense->machine_name, $planet);
-                $resources = $planet->getResources();
-
-                $maxAmount = min(
-                    $price->metal->get() > 0 ? (int)($resources->metal->get() / $price->metal->get()) : 999,
-                    $price->crystal->get() > 0 ? (int)($resources->crystal->get() / $price->crystal->get()) : 999,
-                    $price->deuterium->get() > 0 ? (int)($resources->deuterium->get() / $price->deuterium->get()) : 999,
-                    50
-                );
-
-                if ($maxAmount < 1) {
-                    continue;
-                }
-
-                $affordable[] = ['unit' => $defense, 'amount' => $maxAmount];
-            }
-
-            if (empty($affordable)) {
-                return false;
-            }
-
-            // Pick the best defense based on personality
+            $anyBuilt = false;
             $personality = $bot->getPersonality();
-            $selected = $affordable[array_rand($affordable)];
+            $queueService = app(\OGame\Services\UnitQueueService::class);
 
-            // Turtle personality: build lots of cheap defenses
-            if (in_array($personality, [\OGame\Enums\BotPersonality::TURTLE, \OGame\Enums\BotPersonality::DEFENSIVE])) {
-                usort($affordable, fn($a, $b) => $b['amount'] <=> $a['amount']);
-                $selected = $affordable[0];
+            foreach ($planets as $planet) {
+                if ($bot->isUnitQueueFull($planet)) {
+                    continue;
+                }
+
+                $defenses = \OGame\Services\ObjectService::getDefenseObjects();
+                $affordable = [];
+
+                foreach ($defenses as $defense) {
+                    if (!\OGame\Services\ObjectService::objectRequirementsMet($defense->machine_name, $planet)) {
+                        continue;
+                    }
+
+                    $price = \OGame\Services\ObjectService::getObjectPrice($defense->machine_name, $planet);
+                    $resources = $planet->getResources();
+
+                    $maxAmount = min(
+                        $price->metal->get() > 0 ? (int)($resources->metal->get() / $price->metal->get()) : 999,
+                        $price->crystal->get() > 0 ? (int)($resources->crystal->get() / $price->crystal->get()) : 999,
+                        $price->deuterium->get() > 0 ? (int)($resources->deuterium->get() / $price->deuterium->get()) : 999,
+                        50
+                    );
+
+                    if ($maxAmount < 1) {
+                        continue;
+                    }
+
+                    $affordable[] = ['unit' => $defense, 'amount' => $maxAmount];
+                }
+
+                if (empty($affordable)) {
+                    continue;
+                }
+
+                $selected = $affordable[array_rand($affordable)];
+
+                if (in_array($personality, [\OGame\Enums\BotPersonality::TURTLE, \OGame\Enums\BotPersonality::DEFENSIVE])) {
+                    usort($affordable, fn($a, $b) => $b['amount'] <=> $a['amount']);
+                    $selected = $affordable[0];
+                }
+
+                $amount = min($selected['amount'], rand(5, 30));
+                $queueService->add($planet, $selected['unit']->id, $amount);
+
+                $bot->logAction(BotActionType::DEFENSE, "Built {$amount}x {$selected['unit']->machine_name} on {$planet->getPlanetName()}", []);
+                $anyBuilt = true;
+
+                // Only build on one planet per tick unless turtle/defensive
+                if (!in_array($personality, [\OGame\Enums\BotPersonality::TURTLE, \OGame\Enums\BotPersonality::DEFENSIVE])) {
+                    break;
+                }
             }
 
-            $amount = min($selected['amount'], rand(5, 30));
-            $queueService = app(\OGame\Services\UnitQueueService::class);
-            $queueService->add($planet, $selected['unit']->id, $amount);
-
-            $bot->logAction(BotActionType::DEFENSE, "Built {$amount}x {$selected['unit']->machine_name} on {$planet->getPlanetName()}", []);
-            return true;
+            return $anyBuilt;
         } catch (\Exception $e) {
             logger()->warning("Bot {$bot->getBot()->id}: defense build failed: {$e->getMessage()}");
             return false;

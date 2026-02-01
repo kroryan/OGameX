@@ -78,13 +78,27 @@ class BotFleetBuilderService
             $fleet->addUnit(ObjectService::getUnitObjectByMachineName('recycler'), $sendRecyclers);
         }
 
-        // Raiders always bring cargo ships
-        if (in_array($personality, [BotPersonality::RAIDER, BotPersonality::ECONOMIC])) {
-            $largeCargo = $availableUnits->getAmountByMachineName('large_cargo');
-            if ($largeCargo > 0) {
-                $sendCargo = max(1, (int)($largeCargo * 0.5));
-                $fleet->addUnit(ObjectService::getUnitObjectByMachineName('large_cargo'), $sendCargo);
-            }
+        // ALL personalities bring cargo ships for loot (critical for ROI)
+        $largeCargo = $availableUnits->getAmountByMachineName('large_cargo');
+        $smallCargo = $availableUnits->getAmountByMachineName('small_cargo');
+
+        // Scale cargo based on personality and expected loot
+        $cargoRatio = match ($personality) {
+            BotPersonality::RAIDER => 0.7,
+            BotPersonality::AGGRESSIVE => 0.5,
+            BotPersonality::ECONOMIC => 0.6,
+            BotPersonality::BALANCED => 0.4,
+            default => 0.3,
+        };
+
+        if ($largeCargo > 0) {
+            $sendLarge = max(1, (int)($largeCargo * $cargoRatio));
+            $fleet->addUnit(ObjectService::getUnitObjectByMachineName('large_cargo'), $sendLarge);
+        }
+        // If no large cargo, send small cargo
+        if ($largeCargo === 0 && $smallCargo > 0) {
+            $sendSmall = max(2, (int)($smallCargo * $cargoRatio));
+            $fleet->addUnit(ObjectService::getUnitObjectByMachineName('small_cargo'), $sendSmall);
         }
 
         return $fleet;
@@ -92,10 +106,12 @@ class BotFleetBuilderService
 
     /**
      * Build an expedition fleet for the bot.
+     * Uses fleet planet for best ship availability.
      */
     public function buildExpeditionFleet(BotService $bot, float $fleetPercentage = 0.3): UnitCollection
     {
-        $planet = $bot->getRichestPlanet();
+        // Use fleet planet (most ships) instead of richest
+        $planet = $bot->getFleetPlanet() ?? $bot->getRichestPlanet();
         if ($planet === null) {
             return new UnitCollection();
         }
@@ -123,6 +139,18 @@ class BotFleetBuilderService
             $sendAmount = min($amount, $available);
             if ($sendAmount > 0) {
                 $fleet->addUnit(ObjectService::getUnitObjectByMachineName($machineName), $sendAmount);
+            }
+        }
+
+        // Always include cargo ships for expedition finds (critical for ROI)
+        $largeCargo = $availableUnits->getAmountByMachineName('large_cargo');
+        if ($largeCargo > 0) {
+            $sendCargo = max(3, (int)($largeCargo * 0.3));
+            $fleet->addUnit(ObjectService::getUnitObjectByMachineName('large_cargo'), $sendCargo);
+        } else {
+            $smallCargo = $availableUnits->getAmountByMachineName('small_cargo');
+            if ($smallCargo > 0) {
+                $fleet->addUnit(ObjectService::getUnitObjectByMachineName('small_cargo'), max(5, (int)($smallCargo * 0.3)));
             }
         }
 
@@ -162,19 +190,41 @@ class BotFleetBuilderService
             $defenses = $targetIntel->defenses ?? [];
             $hasPlasmaTurrets = ($defenses['plasma_turret'] ?? 0) > 5;
             $hasGaussCannons = ($defenses['gauss_cannon'] ?? 0) > 10;
+            $hasIonCannons = ($defenses['ion_cannon'] ?? 0) > 20;
+            $hasLightDefenses = ($defenses['rocket_launcher'] ?? 0) > 50 || ($defenses['light_laser'] ?? 0) > 50;
             $hasHeavyDefenses = $hasPlasmaTurrets || $hasGaussCannons;
 
             if ($hasHeavyDefenses) {
-                // Prioritize bombers against heavy defenses
+                // Bombers are strongest vs heavy defenses (rapid fire)
                 $base['bomber'] = 10;
                 $base['destroyer'] = 9;
-                $base['light_fighter'] = 2; // Light fighters die fast against heavy defense
+                $base['light_fighter'] = 2;
+            }
+
+            if ($hasLightDefenses && !$hasHeavyDefenses) {
+                // Cruisers are great vs light defenses (rapid fire vs rocket launchers)
+                $base['cruiser'] = 10;
+                $base['battlecruiser'] = 8;
+            }
+
+            if ($hasIonCannons) {
+                // Destroyers counter ion cannons
+                $base['destroyer'] = 10;
+            }
+
+            // Check target fleet composition
+            $ships = $targetIntel->ships ?? [];
+            $hasHeavyShips = ($ships['battle_ship'] ?? 0) > 5 || ($ships['battlecruiser'] ?? 0) > 5;
+            if ($hasHeavyShips) {
+                // Destroyers and deathstars vs heavy fleet
+                $base['destroyer'] = 10;
+                $base['deathstar'] = 10;
             }
         }
 
         // Personality adjustments
         if ($personality === BotPersonality::RAIDER) {
-            $base['large_cargo'] = 3; // Raiders bring cargo
+            $base['large_cargo'] = 3;
             $base['small_cargo'] = 2;
         }
 

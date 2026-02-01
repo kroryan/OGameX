@@ -142,7 +142,7 @@ class GameStateAnalyzer
             'can_afford_build' => $canAffordBuilding,
             'can_afford_fleet' => $canAffordUnit && $totalResourceSum >= $minResources,
             'can_afford_research' => $canAffordResearch,
-            'has_significant_fleet' => $fleetPoints > 50000,
+            'has_significant_fleet' => $fleetPoints > $this->getSignificantFleetThreshold($this->determineGamePhase($totalPoints)),
             'is_under_threat' => $botService->isUnderThreat(),
             'fleet_slots_available' => $botService->hasFleetSlotsAvailable(),
             'fleet_slots_used' => $fleetSlotsUsed,
@@ -174,6 +174,20 @@ class GameStateAnalyzer
         } else {
             return 'late';
         }
+    }
+
+    /**
+     * Get significant fleet threshold based on game phase.
+     */
+    private function getSignificantFleetThreshold(string $phase): int
+    {
+        $thresholds = config('bots.significant_fleet_threshold', [
+            'early' => 5000,
+            'mid' => 30000,
+            'late' => 80000,
+        ]);
+
+        return $thresholds[$phase] ?? 50000;
     }
 
     private function calculateResourceImbalance(array $resources): float

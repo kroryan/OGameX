@@ -20,14 +20,14 @@ return [
     'scheduler_batch_size' => env('BOTS_SCHEDULER_BATCH_SIZE', 200),
 
     // Default cooldown (in hours) after a bot attacks before it can attack again
-    'default_attack_cooldown_hours' => 2,
+    'default_attack_cooldown_hours' => 1,
 
     // Maximum number of fleets a bot can have active at once
     'max_fleets_per_bot' => 3,
 
     // Chance (0-1) for a bot to go on expedition instead of building fleet
     // 0.15 = 15% chance
-    'expedition_chance' => 0.15,
+    'expedition_chance' => 0.20,
 
     // Allow bots to target other bots (true = bots can attack bots)
     'allow_target_bots' => true,
@@ -43,7 +43,7 @@ return [
 
     // Maximum level a bot will build buildings/research to
     'max_building_level' => 30,
-    'max_research_level' => 10,
+    'max_research_level' => 20,
 
     // Default activity cycle when no schedule is defined
     // Bots are active continuously by default (window >= cycle disables cycling).
@@ -74,6 +74,36 @@ return [
     // Metrics-driven tuning
     'bot_metrics_window_days' => 7,
     'bot_metrics_min_samples' => 20,
+
+    // Dynamic fleet threshold for "significant fleet" by game phase
+    'significant_fleet_threshold' => [
+        'early' => 5000,
+        'mid' => 30000,
+        'late' => 80000,
+    ],
+
+    // Build defenses on all planets, not just richest
+    'defense_all_planets' => true,
+
+    // Expedition holding time range (hours)
+    'expedition_holding_hours_min' => 1,
+    'expedition_holding_hours_max' => 4,
+
+    // Record battle results for learning
+    'record_battle_history' => true,
+
+    // Enable proactive phalanx scanning before attacks
+    'proactive_phalanx_enabled' => true,
+
+    // Moon infrastructure priorities
+    'moon_building_enabled' => true,
+
+    // Prefer nearby targets to save deuterium
+    'prefer_nearby_targets' => true,
+    'nearby_target_system_range' => 50,
+
+    // Auto-recycle debris after own attacks
+    'auto_recycle_after_attack' => true,
 
     // Maximum percentage of units to send in an attack (bot keeps rest for defense)
     'attack_fleet_percentage' => [

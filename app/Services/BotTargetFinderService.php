@@ -69,6 +69,14 @@ class BotTargetFinderService
             // Fall through to standard targeting
         }
 
+        // Try nearby targets first (saves deuterium = better ROI)
+        if (config('bots.prefer_nearby_targets', true)) {
+            $nearby = $this->findNearbyTarget($bot, $botUserIds, $maxScore);
+            if ($nearby !== null) {
+                return $nearby;
+            }
+        }
+
         return match ($targetType) {
             BotTargetType::RANDOM => $this->findRandomTarget($botUserIds, $selfId, $maxScore),
             BotTargetType::WEAK => $this->findWeakTarget($bot, $botUserIds, $maxScore),
@@ -217,6 +225,53 @@ class BotTargetFinderService
             return $this->findRandomTarget($excludeUserIds);
         }
 
+        $planet = $planets->first();
+        return $this->planetFactory->make($planet->id);
+    }
+
+    /**
+     * Find a nearby target (same galaxy, close system) to minimize fuel costs.
+     */
+    private function findNearbyTarget(BotService $bot, array $excludeUserIds = [], int|null $maxScore = null): ?PlanetService
+    {
+        $source = $bot->getFleetPlanet() ?? $bot->getRichestPlanet();
+        if ($source === null) {
+            return null;
+        }
+
+        $coords = $source->getPlanetCoordinates();
+        $range = (int) config('bots.nearby_target_system_range', 50);
+        $minSystem = max(1, $coords->system - $range);
+        $maxSystem = $coords->system + $range;
+        $inactiveThreshold = now()->subMinutes(45)->timestamp;
+        $selfId = $bot->getPlayer()->getId();
+
+        $planets = Planet::where('galaxy', $coords->galaxy)
+            ->whereBetween('system', [$minSystem, $maxSystem])
+            ->where('destroyed', 0)
+            ->whereNotNull('user_id')
+            ->where('user_id', '!=', $selfId)
+            ->whereNotIn('user_id', $excludeUserIds)
+            ->whereHas('user', function ($q) use ($maxScore) {
+                $q->where('vacation_mode', false);
+                if ($maxScore !== null && $maxScore > 0) {
+                    $q->whereHas('highscore', function ($hq) use ($maxScore) {
+                        $hq->where('general', '<=', $maxScore);
+                    });
+                }
+            })
+            ->join('users', 'planets.user_id', '=', 'users.id')
+            ->select('planets.*')
+            ->orderByRaw('users.time < ? desc', [$inactiveThreshold])
+            ->orderByRaw('ABS(planets.system - ?) ASC', [$coords->system])
+            ->limit(10)
+            ->get();
+
+        if ($planets->isEmpty()) {
+            return null;
+        }
+
+        // Prefer inactive players (better ROI)
         $planet = $planets->first();
         return $this->planetFactory->make($planet->id);
     }

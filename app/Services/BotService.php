@@ -134,6 +134,36 @@ class BotService
     }
 
     /**
+     * Get the best planet for fleet operations (highest fleet power).
+     */
+    public function getFleetPlanet(): ?PlanetService
+    {
+        $planets = $this->player->planets->all();
+        if (empty($planets)) {
+            return null;
+        }
+
+        $best = null;
+        $bestPower = 0;
+
+        foreach ($planets as $planet) {
+            $ships = $planet->getShipUnits();
+            $power = 0;
+            if ($ships && !empty($ships->units)) {
+                foreach ($ships->units as $unitObj) {
+                    $power += $this->getUnitPoints($unitObj->unitObject->machine_name) * $unitObj->amount;
+                }
+            }
+            if ($power > $bestPower) {
+                $bestPower = $power;
+                $best = $planet;
+            }
+        }
+
+        return $best ?? $this->getRichestPlanet();
+    }
+
+    /**
      * Get the planet with most resources.
      */
     public function getRichestPlanet(): ?PlanetService
@@ -2428,7 +2458,8 @@ class BotService
         }
 
         try {
-            $source = $this->getRichestPlanet();
+            // Use fleet planet (best military) instead of richest for attacks
+            $source = $this->getFleetPlanet();
             if ($source === null) {
                 $this->logAction(BotActionType::ATTACK, 'No source planet available', [], 'failed');
                 return false;
@@ -2588,8 +2619,22 @@ class BotService
             $this->setAllianceTargetCoordinates($targetCoords);
             $this->tryCreateAcsUnion($mission, $target);
 
+            // Record battle history for learning
+            if (config('bots.record_battle_history', true)) {
+                $this->recordBattleHistory($target, $attackPower, $targetPower, $lootEstimate, $consumption);
+            }
+
+            // Schedule debris recycling after attack
+            if (config('bots.auto_recycle_after_attack', true)) {
+                cache()->put("bot:{$this->bot->id}:recycle_target", [
+                    'g' => $targetCoords->galaxy,
+                    's' => $targetCoords->system,
+                    'p' => $targetCoords->position,
+                ], now()->addHours(2));
+            }
+
             // Set cooldown
-            $cooldown = config('bots.default_attack_cooldown_hours', 2);
+            $cooldown = config('bots.default_attack_cooldown_hours', 1);
             $this->bot->setAttackCooldown($cooldown);
             $this->bot->updateLastAction();
 
@@ -2617,7 +2662,8 @@ class BotService
                 return false;
             }
 
-            $source = $this->getRichestPlanet();
+            // Use fleet planet for expeditions (has the most ships)
+            $source = $this->getFleetPlanet() ?? $this->getRichestPlanet();
             if ($source === null) {
                 $this->logAction(BotActionType::FLEET, 'No planet available for expedition', [], 'failed');
                 return false;
@@ -2652,6 +2698,11 @@ class BotService
                 return false;
             }
 
+            // Variable holding time for better rewards
+            $holdMin = (int) config('bots.expedition_holding_hours_min', 1);
+            $holdMax = (int) config('bots.expedition_holding_hours_max', 4);
+            $holdingHours = rand($holdMin, $holdMax);
+
             // Send the expedition
             $fleetMissionService->createNewFromPlanet(
                 $source,
@@ -2661,7 +2712,7 @@ class BotService
                 $fleet,
                 new Resources(0, 0, 0, 0),
                 $speedPercent,
-                1 // 1 hour holding time
+                $holdingHours
             );
 
             $this->logAction(BotActionType::FLEET, "Sent expedition to {$expeditionCoords->asString()}", [
@@ -2849,7 +2900,8 @@ class BotService
                 return false;
             }
 
-            $source = $this->getRichestPlanet();
+            // Use planet closest to target or with probes available
+            $source = $this->getFleetPlanet() ?? $this->getRichestPlanet();
             if ($source === null) {
                 return false;
             }
@@ -3223,6 +3275,244 @@ class BotService
         ];
 
         return $points[$machineName] ?? 1;
+    }
+
+    /**
+     * Build moon infrastructure (lunar base, phalanx, jump gate).
+     */
+    public function buildMoonInfrastructure(): bool
+    {
+        if (!config('bots.moon_building_enabled', true)) {
+            return false;
+        }
+
+        try {
+            $moons = $this->player->planets->allMoons();
+            if (empty($moons)) {
+                return false;
+            }
+
+            $queueService = app(BuildingQueueService::class);
+            $moonBuildings = [
+                'lunar_base' => 150,
+                'sensor_phalanx' => 120,
+                'jump_gate' => 100,
+            ];
+
+            foreach ($moons as $moon) {
+                if ($this->isBuildingQueueFull($moon)) {
+                    continue;
+                }
+
+                $bestBuilding = null;
+                $bestScore = 0;
+
+                foreach ($moonBuildings as $name => $basePriority) {
+                    if (!ObjectService::objectRequirementsMet($name, $moon)) {
+                        continue;
+                    }
+
+                    $level = $moon->getObjectLevel($name);
+                    $price = ObjectService::getObjectPrice($name, $moon);
+                    $cost = $price->metal->get() + $price->crystal->get() + $price->deuterium->get();
+
+                    $resources = $moon->getResources();
+                    $total = $resources->metal->get() + $resources->crystal->get() + $resources->deuterium->get();
+
+                    if ($cost > $total * 0.8) {
+                        continue;
+                    }
+
+                    // Lunar base is critical - needed for other buildings
+                    $score = $basePriority;
+                    if ($name === 'lunar_base' && $level < 3) {
+                        $score += 100;
+                    }
+                    // Phalanx is very valuable for intelligence
+                    if ($name === 'sensor_phalanx' && $level < 5) {
+                        $score += 50;
+                        if (in_array($this->getPersonality(), [BotPersonality::RAIDER, BotPersonality::AGGRESSIVE])) {
+                            $score += 30;
+                        }
+                    }
+                    // Jump gate for fleet mobility
+                    if ($name === 'jump_gate' && $level < 1) {
+                        $score += 40;
+                    }
+
+                    $score -= $level * 10;
+
+                    if ($score > $bestScore) {
+                        $bestScore = $score;
+                        $bestBuilding = $name;
+                    }
+                }
+
+                if ($bestBuilding) {
+                    $building = ObjectService::getObjectByMachineName($bestBuilding);
+                    $queueService->add($moon, $building->id);
+                    $price = ObjectService::getObjectPrice($bestBuilding, $moon);
+                    $this->logAction(BotActionType::BUILD, "Moon build: {$bestBuilding} on {$moon->getPlanetName()}", [
+                        'metal' => $price->metal->get(),
+                        'crystal' => $price->crystal->get(),
+                        'deuterium' => $price->deuterium->get(),
+                    ]);
+                    $this->bot->updateLastAction();
+                    return true;
+                }
+            }
+
+            return false;
+        } catch (Exception $e) {
+            logger()->debug("Bot {$this->bot->id}: buildMoonInfrastructure failed: {$e->getMessage()}");
+            return false;
+        }
+    }
+
+    /**
+     * Proactive phalanx scan of nearby targets before attacking.
+     */
+    public function proactivePhalanxScan(): bool
+    {
+        if (!config('bots.proactive_phalanx_enabled', true)) {
+            return false;
+        }
+
+        try {
+            $moons = $this->player->planets->allMoons();
+            if (empty($moons)) {
+                return false;
+            }
+
+            $phalanxService = app(PhalanxService::class);
+
+            foreach ($moons as $moon) {
+                $level = $moon->getObjectLevel('sensor_phalanx');
+                if ($level < 1) {
+                    continue;
+                }
+
+                $deut = $moon->getResources()->deuterium->get();
+                if (!$phalanxService->hasEnoughDeuterium($deut)) {
+                    continue;
+                }
+
+                // Find a nearby target to scan
+                $moonCoords = $moon->getPlanetCoordinates();
+                $intel = new BotIntelligenceService();
+                $targets = $intel->getProfitableTargets($this->bot->id, 3);
+
+                foreach ($targets as $target) {
+                    $targetCoords = new \OGame\Models\Planet\Coordinate($target->galaxy, $target->system, $target->planet);
+
+                    if (!$phalanxService->canScanTarget($moonCoords->galaxy, $moonCoords->system, $level, $targetCoords, $this->player->getId())) {
+                        continue;
+                    }
+
+                    // Pay deuterium cost
+                    $moon->planet->deuterium = max(0, (int) $moon->planet->deuterium - $phalanxService->getScanCost());
+                    $moon->planet->save();
+
+                    $scan = $phalanxService->scanPlanetFleets($target->target_planet_id ?? 0, $this->player->getId());
+
+                    // Log the scan for intelligence
+                    $fleetPresent = !empty($scan);
+                    $this->logAction(BotActionType::ESPIONAGE, "Phalanx scan: {$targetCoords->asString()}, fleet=" . ($fleetPresent ? 'yes' : 'no'), []);
+
+                    return true;
+                }
+            }
+
+            return false;
+        } catch (Exception $e) {
+            logger()->debug("Bot {$this->bot->id}: proactivePhalanxScan failed: {$e->getMessage()}");
+            return false;
+        }
+    }
+
+    /**
+     * Record battle history for learning from attack outcomes.
+     */
+    private function recordBattleHistory(PlanetService $target, int $attackPower, int $defensePower, int $estimatedLoot, int $consumption): void
+    {
+        try {
+            \OGame\Models\BotBattleHistory::create([
+                'bot_id' => $this->bot->id,
+                'target_user_id' => $target->getPlayer()->getId(),
+                'target_planet_id' => $target->getPlanetId(),
+                'attack_power' => $attackPower,
+                'defense_power' => $defensePower,
+                'estimated_loot' => $estimatedLoot,
+                'fuel_cost' => $consumption,
+                'result' => 'pending', // Updated when mission completes
+            ]);
+        } catch (Exception $e) {
+            logger()->debug("Bot {$this->bot->id}: recordBattleHistory failed: {$e->getMessage()}");
+        }
+    }
+
+    /**
+     * Try to recycle debris from a previous attack location.
+     */
+    public function tryRecycleAfterAttack(): bool
+    {
+        $cached = cache()->get("bot:{$this->bot->id}:recycle_target");
+        if (!is_array($cached)) {
+            return false;
+        }
+
+        cache()->forget("bot:{$this->bot->id}:recycle_target");
+
+        if (!$this->hasFleetSlotsAvailable()) {
+            return false;
+        }
+
+        $source = $this->getFleetPlanet() ?? $this->getRichestPlanet();
+        if ($source === null) {
+            return false;
+        }
+
+        $recyclers = $source->getObjectAmount('recycler');
+        if ($recyclers < 1) {
+            return false;
+        }
+
+        $targetCoords = new \OGame\Models\Planet\Coordinate($cached['g'], $cached['s'], $cached['p']);
+
+        $field = \OGame\Models\DebrisField::where('galaxy', $cached['g'])
+            ->where('system', $cached['s'])
+            ->where('planet', $cached['p'])
+            ->first();
+
+        if (!$field || ($field->metal + $field->crystal + $field->deuterium) < 1000) {
+            return false;
+        }
+
+        $fleet = new \OGame\GameObjects\Models\Units\UnitCollection();
+        $fleet->addUnit(ObjectService::getUnitObjectByMachineName('recycler'), min(30, $recyclers));
+
+        $fleetMissionService = app(FleetMissionService::class);
+        $consumption = $fleetMissionService->calculateConsumption($source, $fleet, $targetCoords, 0, 100);
+        if ($source->getResources()->deuterium->get() < $consumption) {
+            return false;
+        }
+
+        $fleetMissionService->createNewFromPlanet(
+            $source,
+            $targetCoords,
+            \OGame\Models\Enums\PlanetType::DebrisField,
+            8,
+            $fleet,
+            new Resources(0, 0, 0, 0),
+            100,
+            0
+        );
+
+        $this->logAction(BotActionType::FLEET, "Post-attack recycle to {$targetCoords->asString()}", [
+            'recyclers' => $fleet->getAmount(),
+        ]);
+
+        return true;
     }
 
     /**

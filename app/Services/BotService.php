@@ -1291,13 +1291,19 @@ class BotService
             if (!ObjectService::objectRequirementsMet('terraformer', $planet)) {
                 return false;
             }
-            $currentLevel = $planet->getObjectLevel('terraformer');
-            if ($currentLevel <= 0 && $this->isPlanetFieldFull($planet)) {
-                return false;
-            }
+            // If planet is full of fields, terraformer should be HIGHER priority
+            // not blocked. This is the main way to get more fields.
+            // Removed the incorrect check that prevented building terraformer on full planets.
+
             $price = ObjectService::getObjectPrice('terraformer', $planet);
             $budget = $this->getSpendableBudget($planet, $ignoreReserve);
             $cost = $price->metal->get() + $price->crystal->get() + $price->deuterium->get();
+
+            // Allow spending more reserve when fields are full since terraformer is critical
+            if ($this->isPlanetFieldFull($planet) && !$ignoreReserve) {
+                $budget *= 1.5; // Allow using 50% more reserve when critically full
+            }
+
             return $cost <= $budget;
         } catch (Exception $e) {
             return false;
@@ -1638,6 +1644,26 @@ class BotService
             'small_shield_dome', 'large_shield_dome',
             'anti_ballistic_missile', 'interplanetary_missile',
         ];
+
+        // CRITICAL: If bot needs to colonize and has no colony ship, make it TOP priority
+        if ($machineName === 'colony_ship' && $this->shouldColonize()) {
+            // Check if we already have colony ships available
+            $hasColonyShip = false;
+            if ($planet) {
+                $hasColonyShip = $planet->getObjectAmount('colony_ship') > 0;
+            } else {
+                foreach ($this->player->planets->all() as $p) {
+                    if ($p->getObjectAmount('colony_ship') > 0) {
+                        $hasColonyShip = true;
+                        break;
+                    }
+                }
+            }
+            // If no colony ships available, make it highest priority
+            if (!$hasColonyShip) {
+                $base = 150; // Higher than any other unit
+            }
+        }
 
         // Personality adjustments
         if (in_array($personality, [BotPersonality::AGGRESSIVE, BotPersonality::RAIDER])) {

@@ -252,4 +252,5 @@ Route::middleware(['auth', 'globalgame', 'locale', 'admin'])->group(function () 
     Route::get('/admin/bots/logs', [BotManagementController::class, 'logsAll'])->name('admin.bots.logs-all');
     Route::post('/admin/bots/{botId}/force-action', [BotManagementController::class, 'forceAction'])->name('admin.bots.force-action');
     Route::get('/admin/bots/stats', [BotManagementController::class, 'stats'])->name('admin.bots.stats');
+    Route::get('/admin/bots/stats/data', [BotManagementController::class, 'statsData'])->name('admin.bots.stats-data');
 });

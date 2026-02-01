@@ -462,6 +462,102 @@ class BotManagementController extends OGameController
         ]);
     }
 
+    /**
+     * Get bot statistics data for charts (API endpoint).
+     */
+    public function statsData(): \Illuminate\Http\JsonResponse
+    {
+        $bots = Bot::with('user.highscore')->get();
+
+        // Get highscore data for bots
+        $botScores = [];
+        foreach ($bots as $bot) {
+            if ($bot->user && $bot->user->highscore) {
+                $botScores[] = [
+                    'id' => $bot->id,
+                    'name' => $bot->name,
+                    'personality' => $bot->personality,
+                    'general' => $bot->user->highscore->general ?? 0,
+                    'economy' => $bot->user->highscore->economy ?? 0,
+                    'research' => $bot->user->highscore->research ?? 0,
+                    'military' => $bot->user->highscore->military ?? 0,
+                ];
+            }
+        }
+
+        // Get action history over time (last 7 days)
+        $actionHistory = BotLog::select('action_type', \DB::raw('DATE(created_at) as date'), \DB::raw('COUNT(*) as count'))
+            ->where('created_at', '>=', now()->subDays(7))
+            ->groupBy('date', 'action_type')
+            ->orderBy('date')
+            ->get();
+
+        // Format for chart
+        $actionsByDate = [];
+        $dates = [];
+        foreach ($actionHistory as $record) {
+            $date = $record->date->format('M d');
+            if (!in_array($date, $dates)) {
+                $dates[] = $date;
+            }
+            if (!isset($actionsByDate[$record->action_type])) {
+                $actionsByDate[$record->action_type] = [];
+            }
+            $actionsByDate[$record->action_type][$date] = $record->count;
+        }
+
+        // Fill in missing dates
+        $actionTypes = ['build', 'fleet', 'attack', 'research', 'trade', 'expedition'];
+        $formattedActionHistory = [];
+        foreach ($actionTypes as $type) {
+            $formattedActionHistory[$type] = [];
+            foreach ($dates as $date) {
+                $formattedActionHistory[$type][] = $actionsByDate[$type][$date] ?? 0;
+            }
+        }
+
+        // Success rate over time
+        $successRate = BotLog::select(\DB::raw('DATE(created_at) as date'), \DB::raw('SUM(CASE WHEN result = "success" THEN 1 ELSE 0 END) as success'), \DB::raw('COUNT(*) as total'))
+            ->where('created_at', '>=', now()->subDays(7))
+            ->groupBy('date')
+            ->orderBy('date')
+            ->get();
+
+        $successRateData = [];
+        foreach ($successRate as $record) {
+            $rate = $record->total > 0 ? ($record->success / $record->total) * 100 : 0;
+            $successRateData[] = [
+                'date' => $record->date->format('M d'),
+                'rate' => round($rate, 1),
+            ];
+        }
+
+        return response()->json([
+            'botScores' => $botScores,
+            'actionHistory' => [
+                'dates' => $dates,
+                'actions' => $formattedActionHistory,
+            ],
+            'successRate' => $successRateData,
+            'personalityDistribution' => [
+                'aggressive' => $bots->where('personality', 'aggressive')->count(),
+                'defensive' => $bots->where('personality', 'defensive')->count(),
+                'economic' => $bots->where('personality', 'economic')->count(),
+                'balanced' => $bots->where('personality', 'balanced')->count(),
+            ],
+            'targetTypeDistribution' => [
+                'random' => $bots->where('priority_target_type', 'random')->count(),
+                'weak' => $bots->where('priority_target_type', 'weak')->count(),
+                'rich' => $bots->where('priority_target_type', 'rich')->count(),
+                'similar' => $bots->where('priority_target_type', 'similar')->count(),
+            ],
+            'actionBreakdown' => BotLog::select('action_type', \DB::raw('COUNT(*) as count'))
+                ->groupBy('action_type')
+                ->pluck('count', 'action_type')
+                ->toArray(),
+        ]);
+    }
+
     private function sanitizeEmailLocalPart(string $value): string
     {
         $value = strtolower(trim($value));

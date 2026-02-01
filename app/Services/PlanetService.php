@@ -1991,8 +1991,8 @@ class PlanetService
             }
         }
 
-        $this->planet->energy_used = (int) $energy_consumption_total;
-        $this->planet->energy_max  = (int) $energy_production_total;
+        $this->planet->energy_used = $this->safeIntCast($energy_consumption_total);
+        $this->planet->energy_max  = $this->safeIntCast($energy_production_total);
 
         $production_factor = $this->getResourceProductionFactor() / 100;
 
@@ -2006,9 +2006,27 @@ class PlanetService
 
         // Write values to planet.
         // Use ceil() for positive production to match getObjectProduction() rounding
-        $this->planet->metal_production     = (int) ceil($production_total->metal->get());
-        $this->planet->crystal_production   = (int) ceil($production_total->crystal->get());
-        $this->planet->deuterium_production = (int) ceil($production_total->deuterium->get());
+        $this->planet->metal_production     = $this->safeIntCast(ceil($production_total->metal->get()));
+        $this->planet->crystal_production   = $this->safeIntCast(ceil($production_total->crystal->get()));
+        $this->planet->deuterium_production = $this->safeIntCast(ceil($production_total->deuterium->get()));
+    }
+
+    /**
+     * Safely cast a float to int, clamping to PHP_INT_MIN/PHP_INT_MAX to avoid
+     * "not representable as an int" errors on extremely high building levels.
+     */
+    private function safeIntCast(float|int $value): int
+    {
+        if (is_int($value)) {
+            return $value;
+        }
+        if ($value >= PHP_INT_MAX) {
+            return PHP_INT_MAX;
+        }
+        if ($value <= PHP_INT_MIN) {
+            return PHP_INT_MIN;
+        }
+        return (int) $value;
     }
 
     /**

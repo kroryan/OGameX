@@ -171,6 +171,22 @@
                                     </div>
                                 </div>
 
+                                <p class="box_highlight textCenter no_buddies" style="color: #ff6666;">@lang('Reset Account (WARNING: Irreversible)')</p>
+                                <div class="group bborder" style="display: block; border-color: #ff6666;">
+                                    <div class="fieldwrapper">
+                                        <div class="smallFont" style="color: #ff9999; margin-bottom: 10px;">
+                                            @lang('This will completely reset your account to initial state:')
+                                            <br>- @lang('Delete all colonies (keep only homeworld)')
+                                            <br>- @lang('Reset all buildings to level 0')
+                                            <br>- @lang('Reset all research to level 0')
+                                            <br>- @lang('Remove all units')
+                                            <br>- @lang('Reset resources to starting values (500 metal, 500 crystal)')
+                                            <br>- @lang('Reset character class')
+                                        </div>
+                                        <input type="submit" class="btn_blue" name="reset_account_full" value="@lang('RESET ACCOUNT TO INITIAL STATE')" style="background-color: #cc3333; color: white;">
+                                    </div>
+                                </div>
+
                                 <p class="box_highlight textCenter no_buddies">@lang('Quick resources (current planet)')</p>
                                 <div class="group bborder" style="display: block;">
                                     <div class="fieldwrapper">

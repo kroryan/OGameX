@@ -8,11 +8,13 @@ use OGame\Services\ObjectService;
 
 /**
  * BotFleetBuilderService - Builds fleets for bot actions.
+ * Enhanced with new personalities and adaptive composition.
  */
 class BotFleetBuilderService
 {
     /**
      * Build an attack fleet for the given bot and target.
+     * Now adapts composition based on target defenses from intelligence.
      */
     public function buildAttackFleet(BotService $bot, PlanetService $target): UnitCollection
     {
@@ -21,7 +23,6 @@ class BotFleetBuilderService
             return new UnitCollection();
         }
 
-        // Get available units
         $availableUnits = $planet->getShipUnits();
         if ($availableUnits->getAmount() === 0) {
             return new UnitCollection();
@@ -30,47 +31,39 @@ class BotFleetBuilderService
         $personality = $bot->getPersonality();
         $fleet = new UnitCollection();
 
-        // Fleet composition based on personality or bot settings
         $settings = $bot->getBot()->getFleetSettings();
         $attackPercentage = $settings['attack_fleet_percentage'] ?? match ($personality) {
-            BotPersonality::AGGRESSIVE => 0.9, // Send 90%
-            BotPersonality::DEFENSIVE => 0.5, // Send 50%
-            BotPersonality::ECONOMIC => 0.3,   // Send 30%
-            BotPersonality::BALANCED => 0.7,   // Send 70%
+            BotPersonality::AGGRESSIVE, BotPersonality::RAIDER => 0.9,
+            BotPersonality::DEFENSIVE, BotPersonality::TURTLE => 0.5,
+            BotPersonality::ECONOMIC, BotPersonality::SCIENTIST => 0.3,
+            BotPersonality::EXPLORER => 0.6,
+            BotPersonality::DIPLOMAT => 0.5,
+            BotPersonality::BALANCED => 0.7,
         };
         $attackPercentage = max(0.1, min(0.95, (float) $attackPercentage));
 
-        // Prioritize combat ships
-        $combatPriority = [
-            'deathstar' => 10,
-            'bomber' => 9,
-            'destroyer' => 8,
-            'battlecruiser' => 7,
-            'battle_ship' => 6,
-            'cruiser' => 5,
-            'heavy_fighter' => 4,
-            'light_fighter' => 3,
-            'small_cargo' => 1,
-            'large_cargo' => 1,
-            'colony_ship' => 0,
-            'recycler' => 0,
-            'espionage_probe' => 0,
-        ];
+        // Check intelligence for target defense composition
+        $targetIntel = null;
+        try {
+            $intel = new BotIntelligenceService();
+            $targetIntel = $intel->getTargetIntel($bot->getBot()->id, $target->getPlayer()->getId());
+        } catch (\Exception $e) {
+            // Non-critical
+        }
 
-        // Build fleet based on priority and available units
+        // Adaptive combat priority based on target defenses
+        $combatPriority = $this->getCombatPriority($personality, $targetIntel);
+
         foreach ($availableUnits->units as $unit) {
             $machineName = $unit->unitObject->machine_name;
             $priority = $combatPriority[$machineName] ?? 1;
 
             if ($priority === 0) {
-                continue; // Skip non-combat ships
+                continue;
             }
 
-            // Send percentage based on priority
             $sendAmount = (int)($unit->amount * $attackPercentage * ($priority / 10));
-
             if ($sendAmount > 0) {
-                // Keep at least 1 for defense
                 $sendAmount = min($sendAmount, $unit->amount - 1);
                 if ($sendAmount > 0) {
                     $fleet->addUnit(ObjectService::getUnitObjectByMachineName($machineName), $sendAmount);
@@ -78,11 +71,20 @@ class BotFleetBuilderService
             }
         }
 
-        // Add some recyclers if available (for debris)
+        // Add recyclers for debris
         $recyclers = $availableUnits->getAmountByMachineName('recycler');
         if ($recyclers > 0) {
-            $sendRecyclers = max(1, (int)($recyclers * 0.2)); // Send up to 20%
+            $sendRecyclers = max(1, (int)($recyclers * 0.3));
             $fleet->addUnit(ObjectService::getUnitObjectByMachineName('recycler'), $sendRecyclers);
+        }
+
+        // Raiders always bring cargo ships
+        if (in_array($personality, [BotPersonality::RAIDER, BotPersonality::ECONOMIC])) {
+            $largeCargo = $availableUnits->getAmountByMachineName('large_cargo');
+            if ($largeCargo > 0) {
+                $sendCargo = max(1, (int)($largeCargo * 0.5));
+                $fleet->addUnit(ObjectService::getUnitObjectByMachineName('large_cargo'), $sendCargo);
+            }
         }
 
         return $fleet;
@@ -106,12 +108,14 @@ class BotFleetBuilderService
         $personality = $bot->getPersonality();
         $fleet = new UnitCollection();
 
-        // Expedition fleet composition
-        // Smaller, balanced fleets for expeditions
-        $fleetPercentage = max(0.05, min(0.5, $fleetPercentage));
-        $maxPoints = (int) max(1500, 5000 * $fleetPercentage); // Scale expedition size
+        // Explorers send bigger expedition fleets
+        if ($personality === BotPersonality::EXPLORER) {
+            $fleetPercentage = min(0.6, $fleetPercentage * 1.5);
+        }
 
-        // Calculate fleet composition
+        $fleetPercentage = max(0.05, min(0.6, $fleetPercentage));
+        $maxPoints = (int) max(1500, 5000 * $fleetPercentage);
+
         $composition = $this->calculateExpeditionComposition($personality, $maxPoints);
 
         foreach ($composition as $machineName => $amount) {
@@ -133,31 +137,82 @@ class BotFleetBuilderService
     }
 
     /**
-     * Calculate fleet composition for expedition based on personality and budget.
-     * $maxPoints scales the composition so smaller fleets send fewer units.
+     * Get combat priority map adjusted for target defenses.
      */
+    private function getCombatPriority(BotPersonality $personality, ?\OGame\Models\BotIntel $targetIntel = null): array
+    {
+        $base = [
+            'deathstar' => 10,
+            'bomber' => 9,
+            'destroyer' => 8,
+            'battlecruiser' => 7,
+            'battle_ship' => 6,
+            'cruiser' => 5,
+            'heavy_fighter' => 4,
+            'light_fighter' => 3,
+            'small_cargo' => 1,
+            'large_cargo' => 1,
+            'colony_ship' => 0,
+            'recycler' => 0,
+            'espionage_probe' => 0,
+        ];
+
+        // Adapt based on target defenses from intel
+        if ($targetIntel) {
+            $defenses = $targetIntel->defenses ?? [];
+            $hasPlasmaTurrets = ($defenses['plasma_turret'] ?? 0) > 5;
+            $hasGaussCannons = ($defenses['gauss_cannon'] ?? 0) > 10;
+            $hasHeavyDefenses = $hasPlasmaTurrets || $hasGaussCannons;
+
+            if ($hasHeavyDefenses) {
+                // Prioritize bombers against heavy defenses
+                $base['bomber'] = 10;
+                $base['destroyer'] = 9;
+                $base['light_fighter'] = 2; // Light fighters die fast against heavy defense
+            }
+        }
+
+        // Personality adjustments
+        if ($personality === BotPersonality::RAIDER) {
+            $base['large_cargo'] = 3; // Raiders bring cargo
+            $base['small_cargo'] = 2;
+        }
+
+        return $base;
+    }
+
     private function calculateExpeditionComposition(BotPersonality $personality, int $maxPoints): array
     {
-        // Base composition at maxPoints=5000 (the default scale).
         $baseComposition = match ($personality) {
-            BotPersonality::AGGRESSIVE => [
+            BotPersonality::AGGRESSIVE, BotPersonality::RAIDER => [
                 'battlecruiser' => 5,
                 'battle_ship' => 10,
                 'cruiser' => 20,
                 'light_fighter' => 50,
             ],
-            BotPersonality::DEFENSIVE => [
+            BotPersonality::DEFENSIVE, BotPersonality::TURTLE => [
                 'battle_ship' => 15,
                 'cruiser' => 10,
                 'heavy_fighter' => 30,
             ],
-            BotPersonality::ECONOMIC => [
+            BotPersonality::ECONOMIC, BotPersonality::SCIENTIST => [
                 'large_cargo' => 20,
                 'small_cargo' => 50,
                 'cruiser' => 5,
                 'light_fighter' => 20,
             ],
-            BotPersonality::BALANCED => [
+            BotPersonality::EXPLORER => [
+                'large_cargo' => 30,
+                'cruiser' => 15,
+                'heavy_fighter' => 20,
+                'light_fighter' => 30,
+            ],
+            BotPersonality::DIPLOMAT => [
+                'large_cargo' => 15,
+                'cruiser' => 10,
+                'light_fighter' => 30,
+            ],
+            default => [
                 'battle_ship' => 8,
                 'cruiser' => 15,
                 'heavy_fighter' => 25,
@@ -165,7 +220,6 @@ class BotFleetBuilderService
             ],
         };
 
-        // Scale composition based on maxPoints (base designed for ~5000 points).
         $scale = max(0.1, $maxPoints / 5000);
         $scaled = [];
         foreach ($baseComposition as $unit => $amount) {

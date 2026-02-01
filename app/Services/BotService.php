@@ -242,11 +242,12 @@ class BotService
                 continue;
             }
 
-            if (!$this->hasPlanetFieldSpace($planet)) {
+            $fieldFull = !$this->hasPlanetFieldSpace($planet);
+
+            if ($fieldFull) {
                 if ($this->canUpgradeTerraformer($planet, $ignoreReserve)) {
                     return true;
                 }
-                continue;
             }
 
             $budget = $this->getSpendableBudget($planet, $ignoreReserve);
@@ -256,6 +257,11 @@ class BotService
 
             $buildings = [...ObjectService::getBuildingObjects(), ...ObjectService::getStationObjects()];
             foreach ($buildings as $building) {
+                // Skip buildings that consume fields if planet is full
+                if ($fieldFull && ($building->consumesPlanetField ?? true)) {
+                    continue;
+                }
+
                 $currentLevel = $planet->getObjectLevel($building->machine_name);
                 if ($currentLevel >= config('bots.max_building_level', 30)) {
                     continue;
@@ -372,19 +378,23 @@ class BotService
             return $total;
         }
         $reserve = (float) ($economy['save_for_upgrade_percent'] ?? 0.3);
-        $maxStorageBeforeSpending = (float) ($economy['max_storage_before_spending'] ?? 0.9);
+        $maxStorageBeforeSpending = (float) ($economy['max_storage_before_spending'] ?? 0.7);
         $usagePercent = $this->getStorageUsagePercent($planet);
-        if ($total < 5000) {
-            // Early game: spend more aggressively to avoid stalling.
-            $reserve = min($reserve, 0.2);
+        if ($total < 10000) {
+            // Early game: spend aggressively to avoid stalling.
+            $reserve = min($reserve, 0.15);
             $roles = $this->getPlanetRoles();
             if (($roles[$planet->getPlanetId()] ?? null) === 'colony') {
-                $reserve = min($reserve, 0.1);
+                $reserve = min($reserve, 0.05);
             }
-        } elseif ($usagePercent < $maxStorageBeforeSpending) {
-            // Keep more resources when storage isn't pressured
-            $reserve = min(0.9, max($reserve, 0.6));
+        } elseif ($total < 50000) {
+            // Mid-early: moderate reserve
+            $reserve = min($reserve, 0.25);
+        } elseif ($usagePercent >= $maxStorageBeforeSpending) {
+            // Storage pressured: spend more to avoid waste
+            $reserve = min($reserve, 0.15);
         }
+        // Otherwise use the configured reserve (default 30%), no longer inflating to 60-90%
 
         return $total * max(0, 1 - $reserve);
     }
@@ -420,17 +430,16 @@ class BotService
             return true;
         }
 
-        if ($this->getPersonality() === BotPersonality::AGGRESSIVE) {
-            if (in_array($machineName, ['colony_ship', 'recycler', 'solar_satellite', 'crawler'])) {
-                return false;
-            }
-        } elseif ($this->getPersonality() === BotPersonality::ECONOMIC) {
-            if (in_array($machineName, ['colony_ship', 'recycler'])) {
-                return false;
-            }
-        }
+        $personality = $this->getPersonality();
+        $skipList = match ($personality) {
+            BotPersonality::AGGRESSIVE, BotPersonality::RAIDER => ['colony_ship', 'recycler', 'solar_satellite', 'crawler'],
+            BotPersonality::ECONOMIC => ['colony_ship', 'recycler'],
+            BotPersonality::TURTLE => ['colony_ship', 'recycler', 'espionage_probe'], // Turtles don't need probes
+            BotPersonality::SCIENTIST => ['colony_ship'], // Scientists keep recyclers for resources
+            default => [],
+        };
 
-        return true;
+        return !in_array($machineName, $skipList);
     }
 
     public function shouldColonize(): bool
@@ -450,11 +459,18 @@ class BotService
             return false;
         }
 
-        // Personality influence: aggressive bots delay colonization until they have a fleet.
+        // Personality influence on colonization timing
         $personality = $this->getPersonality();
-        if ($personality === BotPersonality::AGGRESSIVE) {
+        if (in_array($personality, [BotPersonality::AGGRESSIVE, BotPersonality::RAIDER])) {
             $state = (new GameStateAnalyzer())->analyzeCurrentState($this);
             if (($state['fleet_points'] ?? 0) < 80000) {
+                return false;
+            }
+        }
+        // Turtles delay colonization until they have solid defense
+        if ($personality === BotPersonality::TURTLE) {
+            $state = $state ?? (new GameStateAnalyzer())->analyzeCurrentState($this);
+            if (($state['defense_points'] ?? 0) < 5000) {
                 return false;
             }
         }
@@ -488,9 +504,11 @@ class BotService
             }
 
             $class = match ($this->getPersonality()) {
-                BotPersonality::AGGRESSIVE => CharacterClass::GENERAL,
-                BotPersonality::ECONOMIC => CharacterClass::COLLECTOR,
-                BotPersonality::DEFENSIVE => CharacterClass::GENERAL,
+                BotPersonality::AGGRESSIVE, BotPersonality::RAIDER => CharacterClass::GENERAL,
+                BotPersonality::ECONOMIC, BotPersonality::SCIENTIST => CharacterClass::COLLECTOR,
+                BotPersonality::DEFENSIVE, BotPersonality::TURTLE => CharacterClass::GENERAL,
+                BotPersonality::EXPLORER => CharacterClass::DISCOVERER,
+                BotPersonality::DIPLOMAT => CharacterClass::COLLECTOR,
                 default => CharacterClass::DISCOVERER,
             };
 
@@ -987,11 +1005,13 @@ class BotService
                     continue;
                 }
 
-                if (!$this->hasPlanetFieldSpace($planet)) {
+                $fieldFull = !$this->hasPlanetFieldSpace($planet);
+
+                if ($fieldFull) {
                     if ($this->canUpgradeTerraformer($planet)) {
                         return $this->buildTerraformer($planet);
                     }
-                    continue;
+                    // Don't skip entirely - we can still build non-field buildings
                 }
 
                 $role = $roles[$planet->getPlanetId()] ?? 'colony';
@@ -1011,7 +1031,8 @@ class BotService
                         continue;
                     }
 
-                    if (!$this->hasPlanetFieldSpace($planet) && ($building->consumesPlanetField ?? true)) {
+                    // Skip buildings that consume fields if planet is full
+                    if ($fieldFull && ($building->consumesPlanetField ?? true)) {
                         continue;
                     }
 
@@ -1160,26 +1181,40 @@ class BotService
         }
 
         // Personality-based modifiers
-        if ($personality === BotPersonality::ECONOMIC) {
-            // Economic bots LOVE mines and production
+        if (in_array($personality, [BotPersonality::ECONOMIC, BotPersonality::SCIENTIST])) {
             if (in_array($machineName, ['metal_mine', 'crystal_mine', 'deuterium_synthesizer'])) {
                 $base += 30;
             }
             if (in_array($machineName, ['nano_factory', 'robot_factory', 'fusion_plant'])) {
                 $base += 20;
             }
-        } elseif ($personality === BotPersonality::AGGRESSIVE) {
-            // Aggressive bots prioritize fleet production facilities
+            if ($personality === BotPersonality::SCIENTIST && $machineName === 'research_lab') {
+                $base += 40;
+            }
+        } elseif (in_array($personality, [BotPersonality::AGGRESSIVE, BotPersonality::RAIDER])) {
             if (in_array($machineName, ['robot_factory', 'shipyard', 'nano_factory'])) {
                 $base += 30;
             }
-        } elseif ($personality === BotPersonality::DEFENSIVE) {
-            // Defensive bots prioritize storage and defenses
+        } elseif (in_array($personality, [BotPersonality::DEFENSIVE, BotPersonality::TURTLE])) {
             if (in_array($machineName, ['metal_store', 'crystal_store', 'deuterium_store'])) {
                 $base += 30;
             }
             if (in_array($machineName, ['missile_silo'])) {
                 $base += 35;
+            }
+            if ($personality === BotPersonality::TURTLE) {
+                // Turtles love all storage and defense infrastructure
+                if (in_array($machineName, ['metal_mine', 'crystal_mine', 'deuterium_synthesizer'])) {
+                    $base += 15;
+                }
+            }
+        } elseif ($personality === BotPersonality::EXPLORER) {
+            if (in_array($machineName, ['shipyard', 'research_lab'])) {
+                $base += 20;
+            }
+        } elseif ($personality === BotPersonality::DIPLOMAT) {
+            if (in_array($machineName, ['metal_mine', 'crystal_mine', 'deuterium_synthesizer', 'research_lab'])) {
+                $base += 15;
             }
         }
 
@@ -1546,14 +1581,8 @@ class BotService
         $resources = $planet->getResources();
 
         foreach ($units as $unit) {
-            if ($this->getPersonality() === BotPersonality::AGGRESSIVE) {
-                if (in_array($unit->machine_name, ['colony_ship', 'recycler', 'solar_satellite', 'crawler'])) {
-                    continue;
-                }
-            } elseif ($this->getPersonality() === BotPersonality::ECONOMIC) {
-                if (in_array($unit->machine_name, ['colony_ship', 'recycler'])) {
-                    continue;
-                }
+            if (!$this->shouldConsiderUnitForPersonality($unit->machine_name)) {
+                continue;
             }
 
             if (!ObjectService::objectRequirementsMet($unit->machine_name, $planet)) {
@@ -1611,23 +1640,48 @@ class BotService
         ];
 
         // Personality adjustments
-        if ($personality === BotPersonality::AGGRESSIVE) {
+        if (in_array($personality, [BotPersonality::AGGRESSIVE, BotPersonality::RAIDER])) {
             if (in_array($machineName, ['battle_ship', 'battlecruiser', 'destroyer', 'bomber'])) {
                 $base += 15;
             }
             if (in_array($machineName, $defenseUnits)) {
                 $base -= 10;
             }
-        } elseif ($personality === BotPersonality::ECONOMIC) {
+            if ($personality === BotPersonality::RAIDER) {
+                // Raiders love cargo ships for looting
+                if (in_array($machineName, ['small_cargo', 'large_cargo'])) {
+                    $base += 20;
+                }
+                if ($machineName === 'espionage_probe') {
+                    $base += 15;
+                }
+            }
+        } elseif (in_array($personality, [BotPersonality::ECONOMIC, BotPersonality::SCIENTIST])) {
             if (in_array($machineName, ['small_cargo', 'large_cargo'])) {
                 $base += 15;
             }
             if (in_array($machineName, $defenseUnits)) {
                 $base -= 5;
             }
-        } elseif ($personality === BotPersonality::DEFENSIVE) {
+        } elseif (in_array($personality, [BotPersonality::DEFENSIVE, BotPersonality::TURTLE])) {
             if (in_array($machineName, $defenseUnits)) {
                 $base += 20;
+            }
+            if ($personality === BotPersonality::TURTLE) {
+                // Turtles heavily prioritize defenses over ships
+                if (!in_array($machineName, $defenseUnits)) {
+                    $base -= 15;
+                } else {
+                    $base += 15;
+                }
+            }
+        } elseif ($personality === BotPersonality::EXPLORER) {
+            if (in_array($machineName, ['espionage_probe', 'large_cargo', 'colony_ship'])) {
+                $base += 15;
+            }
+        } elseif ($personality === BotPersonality::DIPLOMAT) {
+            if (in_array($machineName, ['small_cargo', 'large_cargo', 'recycler'])) {
+                $base += 10;
             }
         }
 
@@ -2153,7 +2207,7 @@ class BotService
         }
 
         // Personality modifiers
-        if ($personality === BotPersonality::AGGRESSIVE) {
+        if (in_array($personality, [BotPersonality::AGGRESSIVE, BotPersonality::RAIDER])) {
             if (str_starts_with($machineName, 'weapon') ||
                 str_starts_with($machineName, 'shield') ||
                 str_starts_with($machineName, 'armor')) {
@@ -2162,13 +2216,35 @@ class BotService
             if (in_array($machineName, ['combustion_drive', 'impulse_drive', 'hyperspace_drive'])) {
                 $base += 15;
             }
-        } elseif ($personality === BotPersonality::DEFENSIVE) {
+            if ($personality === BotPersonality::RAIDER) {
+                if ($machineName === 'espionage_technology') {
+                    $base += 25; // Raiders need espionage
+                }
+            }
+        } elseif (in_array($personality, [BotPersonality::DEFENSIVE, BotPersonality::TURTLE])) {
             if (in_array($machineName, ['shielding_technology', 'armor_technology', 'ion_technology', 'plasma_technology'])) {
                 $base += 20;
             }
-        } elseif ($personality === BotPersonality::ECONOMIC) {
+            if ($personality === BotPersonality::TURTLE) {
+                if (in_array($machineName, ['laser_technology', 'ion_technology'])) {
+                    $base += 15; // Turtle loves defense tech
+                }
+            }
+        } elseif (in_array($personality, [BotPersonality::ECONOMIC, BotPersonality::SCIENTIST])) {
             if (in_array($machineName, ['energy_technology', 'plasma_technology', 'computer_technology', 'espionage_technology'])) {
                 $base += 20;
+            }
+            if ($personality === BotPersonality::SCIENTIST) {
+                // Scientists boost ALL research uniformly
+                $base += 15;
+            }
+        } elseif ($personality === BotPersonality::EXPLORER) {
+            if (in_array($machineName, ['astrophysics', 'hyperspace_drive', 'impulse_drive', 'computer_technology'])) {
+                $base += 20;
+            }
+        } elseif ($personality === BotPersonality::DIPLOMAT) {
+            if (in_array($machineName, ['computer_technology', 'espionage_technology', 'hyperspace_technology'])) {
+                $base += 15;
             }
         } elseif ($personality === BotPersonality::BALANCED) {
             if (in_array($machineName, ['hyperspace_technology', 'computer_technology', 'espionage_technology'])) {
@@ -2640,6 +2716,7 @@ class BotService
         $defense = $this->calculateReportDefensePower($report);
         $userId = $target->getPlayer()->getId();
 
+        // Cache-based intel (fast lookup)
         $cacheKey = 'bot_target_intel_' . $this->bot->id;
         $intel = cache()->get($cacheKey, []);
         if (!is_array($intel)) {
@@ -2654,6 +2731,20 @@ class BotService
             'ts' => now()->timestamp,
         ];
         cache()->put($cacheKey, $intel, now()->addHours(12));
+
+        // Persistent DB-based intel
+        try {
+            $intelService = new BotIntelligenceService();
+            $intelService->recordEspionageIntel($this->bot->id, $report, $userId);
+
+            // Update activity pattern for the target
+            $targetUser = $target->getPlayer()->getUser();
+            $isActive = ($targetUser->time ?? 0) > (now()->timestamp - 900);
+            $intelService->updateActivityPattern($this->bot->id, $userId, $isActive);
+        } catch (\Exception $e) {
+            // Non-critical: persistent intel recording failed
+            logger()->debug("Bot {$this->bot->id}: persistent intel recording failed: {$e->getMessage()}");
+        }
     }
 
     private function getBestKnownTarget(): ?PlanetService

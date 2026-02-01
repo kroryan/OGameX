@@ -21,6 +21,7 @@ class BotTargetFinderService
 
     /**
      * Find a target planet based on the bot's target type preference.
+     * Now uses persistent intelligence data for better targeting.
      */
     public function findTarget(BotService $bot, BotTargetType $targetType): ?PlanetService
     {
@@ -32,11 +33,41 @@ class BotTargetFinderService
         if (!empty($avoidUserIds)) {
             $botUserIds = array_values(array_unique(array_merge($botUserIds, $avoidUserIds)));
         }
+
+        // Also avoid NAP and ally targets
+        try {
+            $intel = new BotIntelligenceService();
+            $threatMap = $intel->getThreatMap($bot->getBot()->id);
+            foreach ($threatMap as $entry) {
+                if ($entry->is_nap || $entry->is_ally) {
+                    $botUserIds[] = $entry->threat_user_id;
+                }
+            }
+            $botUserIds = array_values(array_unique($botUserIds));
+        } catch (\Exception $e) {
+            // Non-critical
+        }
+
         $selfId = $bot->getPlayer()->getId();
         $avoidStronger = (bool) (($bot->getBot()->behavior_flags['avoid_stronger_players'] ?? false));
         $botScore = $this->getBotScore($bot);
         $ratio = (float) config('bots.avoid_stronger_player_ratio', 1.2);
         $maxScore = $avoidStronger && $botScore > 0 ? (int) ($botScore * $ratio) : null;
+
+        // First try: known profitable targets from intelligence
+        try {
+            $intel = new BotIntelligenceService();
+            $profitableTargets = $intel->getProfitableTargets($bot->getBot()->id, 5, $botUserIds);
+            if ($profitableTargets->isNotEmpty()) {
+                $best = $profitableTargets->first();
+                $planet = \OGame\Models\Planet::where('user_id', $best->target_user_id)->first();
+                if ($planet && $planet->user_id !== $selfId) {
+                    return $this->planetFactory->make($planet->id);
+                }
+            }
+        } catch (\Exception $e) {
+            // Fall through to standard targeting
+        }
 
         return match ($targetType) {
             BotTargetType::RANDOM => $this->findRandomTarget($botUserIds, $selfId, $maxScore),

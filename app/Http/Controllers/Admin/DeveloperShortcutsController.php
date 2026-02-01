@@ -296,6 +296,74 @@ class DeveloperShortcutsController extends OGameController
                 ->delete();
 
             return redirect()->back()->with('success', 'Queues cleared for current planet and player research.');
+        } elseif ($request->has('reset_account_full')) {
+            // Handle "Reset account to initial state"
+            // This completely resets the account to creation state
+            $user = $playerService->getUser();
+
+            // Clear all queues first
+            foreach ($playerService->planets->all() as $planet) {
+                BuildingQueue::where('planet_id', $planet->getPlanetId())->delete();
+                UnitQueue::where('planet_id', $planet->getPlanetId())->delete();
+            }
+            ResearchQueue::whereIn('planet_id', $playerService->planets->allIds())->delete();
+
+            // Keep only the homeworld (first planet), delete all others
+            $planets = $playerService->planets->all();
+            $homeworld = null;
+            foreach ($planets as $planet) {
+                if ($planet->getPlanetId() === $user->planet_current) {
+                    $homeworld = $planet;
+                } else {
+                    $planet->abandonPlanet();
+                }
+            }
+
+            if ($homeworld) {
+                // Reset all buildings on homeworld
+                foreach (ObjectService::getBuildingObjects() as $building) {
+                    $homeworld->setObjectLevel($building->id, 0);
+                }
+                foreach (ObjectService::getStationObjects() as $building) {
+                    $homeworld->setObjectLevel($building->id, 0);
+                }
+
+                // Reset all units on homeworld
+                foreach (ObjectService::getUnitObjects() as $unit) {
+                    $currentAmount = $homeworld->getObjectAmount($unit->machine_name);
+                    if ($currentAmount > 0) {
+                        $homeworld->removeUnit($unit->machine_name, $currentAmount);
+                    }
+                }
+
+                // Reset resources to starting values
+                $homeworld->setResources(new Resources(
+                    metal: 500,
+                    crystal: 500,
+                    deuterium: 0,
+                    energy: 0
+                ));
+
+                // Set initial buildings (like starting state)
+                $homeworld->setObjectLevel(ObjectService::getObjectByMachineName('metal_mine')->id, 0);
+                $homeworld->setObjectLevel(ObjectService::getObjectByMachineName('crystal_mine')->id, 0);
+                $homeworld->setObjectLevel(ObjectService::getObjectByMachineName('deuterium_synthesizer')->id, 0);
+                $homeworld->setObjectLevel(ObjectService::getObjectByMachineName('solar_plant')->id, 0);
+                $homeworld->save();
+            }
+
+            // Reset all research
+            foreach (ObjectService::getResearchObjects() as $research) {
+                $playerService->setResearchLevel($research->machine_name, 0);
+            }
+
+            // Reset character class
+            $user->character_class = null;
+            $user->character_class_free_used = false;
+            $user->character_class_changed_at = null;
+            $user->save();
+
+            return redirect()->back()->with('success', 'Account has been reset to initial state. Only homeworld remains with starting resources.');
         }
 
         // Handle unit submission

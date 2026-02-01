@@ -44,6 +44,11 @@ class Bot extends Model
         'economy_settings',
         'fleet_settings',
         'behavior_flags',
+        'state',
+        'traits',
+        'risk_tolerance',
+        'preferred_targets',
+        'espionage_counter',
     ];
 
     protected $casts = [
@@ -56,6 +61,10 @@ class Bot extends Model
         'economy_settings' => 'array',
         'fleet_settings' => 'array',
         'behavior_flags' => 'array',
+        'traits' => 'array',
+        'preferred_targets' => 'array',
+        'risk_tolerance' => 'integer',
+        'espionage_counter' => 'integer',
     ];
 
     /**
@@ -210,7 +219,7 @@ class Bot extends Model
         $default = [
             'save_for_upgrade_percent' => 0.3, // Save 30% of production for upgrades
             'min_resources_for_actions' => 500, // Minimum resources to perform actions
-            'max_storage_before_spending' => 0.7, // Only spend if storage is 70% full
+            'max_storage_before_spending' => 0.7, // Start spending when storage is 70% full
             'prioritize_production' => 'balanced', // 'balanced', 'metal', 'crystal', 'deuterium'
         ];
 
@@ -290,5 +299,90 @@ class Bot extends Model
     {
         $this->last_action_at = now();
         $this->save();
+    }
+
+    // --- New relationships for intelligence system ---
+
+    public function intel(): HasMany
+    {
+        return $this->hasMany(BotIntel::class);
+    }
+
+    public function strategicPlans(): HasMany
+    {
+        return $this->hasMany(BotStrategicPlan::class);
+    }
+
+    public function activePlans(): HasMany
+    {
+        return $this->hasMany(BotStrategicPlan::class)->where('status', 'active');
+    }
+
+    public function battleHistory(): HasMany
+    {
+        return $this->hasMany(BotBattleHistory::class);
+    }
+
+    public function threatMap(): HasMany
+    {
+        return $this->hasMany(BotThreatMap::class);
+    }
+
+    public function planetPlans(): HasMany
+    {
+        return $this->hasMany(BotPlanetPlan::class);
+    }
+
+    public function activityPatterns(): HasMany
+    {
+        return $this->hasMany(BotActivityPattern::class);
+    }
+
+    public function expeditionLogs(): HasMany
+    {
+        return $this->hasMany(BotExpeditionLog::class);
+    }
+
+    // --- State machine ---
+
+    public function getState(): string
+    {
+        return $this->state ?? 'exploring';
+    }
+
+    public function setState(string $state): void
+    {
+        $validStates = ['exploring', 'building', 'raiding', 'defending', 'saving', 'colonizing', 'planning'];
+        if (in_array($state, $validStates, true)) {
+            $this->state = $state;
+            $this->save();
+        }
+    }
+
+    // --- Traits system ---
+
+    public function getTraits(): array
+    {
+        return $this->traits ?? [];
+    }
+
+    public function hasTrait(string $trait): bool
+    {
+        return in_array($trait, $this->getTraits(), true);
+    }
+
+    public function getRiskTolerance(): int
+    {
+        return $this->risk_tolerance ?? 50;
+    }
+
+    public function isHighRisk(): bool
+    {
+        return $this->getRiskTolerance() >= 70;
+    }
+
+    public function isLowRisk(): bool
+    {
+        return $this->getRiskTolerance() <= 30;
     }
 }

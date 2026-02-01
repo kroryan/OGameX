@@ -181,6 +181,45 @@ class ExpeditionMission extends GameMission
                 break;
         }
 
+        // Record expedition result for bot intelligence
+        try {
+            $expeditionBot = \OGame\Models\Bot::where('user_id', $mission->user_id)->first();
+            if ($expeditionBot) {
+                $resourcesGained = $returnResources->sum();
+                $fleetSent = $this->fleetMissionService->getFleetUnits($mission);
+                $fleetLost = $fleetSent->getAmount() - $units->getAmount();
+                $resultType = match ($outcome) {
+                    ExpeditionOutcomeType::GainResources => 'resources',
+                    ExpeditionOutcomeType::GainShips => 'ships',
+                    ExpeditionOutcomeType::GainDarkMatter => 'dark_matter',
+                    ExpeditionOutcomeType::GainMerchantTrade => 'merchant',
+                    ExpeditionOutcomeType::GainItems => 'item',
+                    ExpeditionOutcomeType::LossOfFleet => 'fleet_lost',
+                    ExpeditionOutcomeType::BattlePirates, ExpeditionOutcomeType::BattleAliens => 'battle',
+                    default => 'nothing',
+                };
+
+                \OGame\Models\BotExpeditionLog::create([
+                    'bot_id' => $expeditionBot->id,
+                    'resources_found' => $resourcesGained,
+                    'dark_matter_found' => $resultType === 'dark_matter' ? 1 : 0,
+                    'ships_found' => $resultType === 'ships' ? 1 : 0,
+                    'found_nothing' => in_array($resultType, ['nothing']),
+                    'lost_fleet' => $resultType === 'fleet_lost',
+                    'details' => [
+                        'outcome' => $outcome->name,
+                        'result_type' => $resultType,
+                        'metal' => $returnResources->metal->get(),
+                        'crystal' => $returnResources->crystal->get(),
+                        'deuterium' => $returnResources->deuterium->get(),
+                        'fleet_lost_count' => $fleetLost,
+                    ],
+                ]);
+            }
+        } catch (\Exception $e) {
+            // Non-critical: bot expedition logging
+        }
+
         // Mark the arrival mission as processed
         $mission->processed = 1;
         $mission->save();

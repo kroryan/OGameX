@@ -9,6 +9,9 @@ enum BotActionType: string
     case FLEET = 'fleet';
     case ATTACK = 'attack';
     case TRADE = 'trade';
+    case ESPIONAGE = 'espionage';
+    case DEFENSE = 'defense';
+    case DIPLOMACY = 'diplomacy';
 
     /**
      * Get the display label for this action type.
@@ -21,6 +24,9 @@ enum BotActionType: string
             self::FLEET => 'Build Fleet',
             self::ATTACK => 'Attack',
             self::TRADE => 'Trade',
+            self::ESPIONAGE => 'Espionage',
+            self::DEFENSE => 'Build Defense',
+            self::DIPLOMACY => 'Diplomacy',
         };
     }
 }

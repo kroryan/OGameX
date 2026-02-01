@@ -376,6 +376,52 @@ class AttackMission extends GameMission
             ]);
         }
 
+        // Record battle history for bot intelligence (if attacker is a bot)
+        try {
+            $attackerBot = \OGame\Models\Bot::where('user_id', $attackerPlayer->getId())->first();
+            if ($attackerBot) {
+                $lootTotal = $battleResult->loot->metal->get() + $battleResult->loot->crystal->get() + $battleResult->loot->deuterium->get();
+                $attackerLoss = $battleResult->attackerResourceLoss->sum();
+                $defenderLoss = $battleResult->defenderResourceLoss->sum();
+                $won = $battleResult->attackerUnitsResult->getAmount() > 0 && $battleResult->defenderUnitsResult->getAmount() === 0;
+
+                $unitsLost = clone $battleResult->attackerUnitsStart;
+                $unitsLost->subtractCollection($battleResult->attackerUnitsResult);
+
+                \OGame\Models\BotBattleHistory::create([
+                    'bot_id' => $attackerBot->id,
+                    'target_user_id' => $defenderPlanet->getPlayer()->getId(),
+                    'target_planet_id' => $defenderPlanet->getPlanetId(),
+                    'battle_type' => 'attack',
+                    'result' => $won ? 'win' : ($battleResult->attackerUnitsResult->getAmount() === 0 ? 'loss' : 'draw'),
+                    'loot_gained' => $lootTotal,
+                    'fleet_lost_value' => (int) $attackerLoss,
+                    'fleet_sent' => $this->unitCollectionToArray($battleResult->attackerUnitsStart),
+                    'fleet_lost' => $this->unitCollectionToArray($unitsLost),
+                    'enemy_fleet' => $this->unitCollectionToArray($battleResult->defenderUnitsStart),
+                ]);
+
+                // Update threat map: record our attack on them
+                $threatEntry = \OGame\Models\BotThreatMap::firstOrCreate(
+                    ['bot_id' => $attackerBot->id, 'threat_user_id' => $defenderPlanet->getPlayer()->getId()],
+                    ['threat_score' => 0, 'times_attacked_us' => 0, 'times_we_attacked' => 0, 'times_we_won' => 0, 'times_we_lost' => 0, 'is_nap' => false, 'is_ally' => false]
+                );
+                $threatEntry->recordOurAttack($won);
+            }
+
+            // Also check if defender is a bot - record threat from attacker
+            $defenderBot = \OGame\Models\Bot::where('user_id', $defenderPlanet->getPlayer()->getId())->first();
+            if ($defenderBot) {
+                $threatEntry = \OGame\Models\BotThreatMap::firstOrCreate(
+                    ['bot_id' => $defenderBot->id, 'threat_user_id' => $attackerPlayer->getId()],
+                    ['threat_score' => 0, 'times_attacked_us' => 0, 'times_we_attacked' => 0, 'times_we_won' => 0, 'times_we_lost' => 0, 'is_nap' => false, 'is_ally' => false]
+                );
+                $threatEntry->recordAttackOnUs();
+            }
+        } catch (\Exception $e) {
+            // Non-critical: bot battle history recording
+        }
+
         // Mark the arrival mission as processed
         $mission->processed = 1;
         $mission->save();
@@ -634,5 +680,17 @@ class AttackMission extends GameMission
         $report->save();
 
         return $report->id;
+    }
+
+    /**
+     * Convert a UnitCollection to a simple array of machine_name => amount.
+     */
+    private function unitCollectionToArray(UnitCollection $units): array
+    {
+        $result = [];
+        foreach ($units->units as $unit) {
+            $result[$unit->unitObject->machine_name] = $unit->amount;
+        }
+        return $result;
     }
 }

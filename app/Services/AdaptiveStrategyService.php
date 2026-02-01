@@ -8,10 +8,8 @@ use OGame\Enums\BotActionType;
 /**
  * AdaptiveStrategyService - Adjust bot behavior based on metrics.
  *
- * Overrides are stored in cache rather than overwriting the bot's DB settings,
- * so admin-configured values are preserved. The Bot model's getActionProbabilities()
- * and getEconomySettings() remain the admin baseline; adaptive adjustments are
- * layered on top via cache and applied by BotDecisionService scoring.
+ * Overrides are stored in cache rather than overwriting the bot's DB settings.
+ * Enhanced with new action types and more nuanced adaptation.
  */
 class AdaptiveStrategyService
 {
@@ -34,11 +32,10 @@ class AdaptiveStrategyService
         $growth = $this->metrics->getGrowthRate($state, $botId);
         $efficiency = $this->metrics->getResourceEfficiency($state, $botId);
 
-        // Start from the admin-configured base values (not previously adapted values).
         $economy = $bot->economy_settings ?? [];
         $actionProbs = $bot->action_probabilities ?? [];
 
-        $longTerm = app(\OGame\Services\BotLongTermStrategyService::class)->getStrategy($botService, $state);
+        $longTerm = app(BotLongTermStrategyService::class)->getStrategy($botService, $state);
         $economy = array_merge($economy, $longTerm['economy'] ?? []);
 
         $changed = false;
@@ -55,12 +52,14 @@ class AdaptiveStrategyService
             $actionProbs['fleet'] = min(45, ($actionProbs['fleet'] ?? 25) + 4);
             $actionProbs['attack'] = min(35, ($actionProbs['attack'] ?? 20) + 3);
             $actionProbs['build'] = max(20, ($actionProbs['build'] ?? 30) - 3);
+            $actionProbs['espionage'] = min(15, ($actionProbs['espionage'] ?? 5) + 2);
             $changed = true;
         }
 
         if (!empty($state['is_under_threat'])) {
             $actionProbs['attack'] = max(5, ($actionProbs['attack'] ?? 20) - 5);
             $actionProbs['build'] = min(70, ($actionProbs['build'] ?? 30) + 5);
+            $actionProbs['defense'] = min(30, ($actionProbs['defense'] ?? 10) + 10);
             $changed = true;
         }
 
@@ -75,8 +74,16 @@ class AdaptiveStrategyService
             $changed = true;
         }
 
+        // Defense adaptation based on defense/building ratio
+        $defenseRatio = ($state['building_points'] ?? 0) > 0
+            ? ($state['defense_points'] ?? 0) / max(1, $state['building_points'])
+            : 0;
+        if ($defenseRatio < 0.05 && ($state['game_phase'] ?? 'early') !== 'early') {
+            $actionProbs['defense'] = min(25, ($actionProbs['defense'] ?? 5) + 5);
+            $changed = true;
+        }
+
         if ($changed) {
-            // Store overrides in cache instead of overwriting DB settings.
             Cache::put("bot:{$botId}:adaptive_economy", $economy, now()->addMinutes(60));
             Cache::put("bot:{$botId}:adaptive_action_probs", $actionProbs, now()->addMinutes(60));
 
@@ -90,17 +97,11 @@ class AdaptiveStrategyService
         Cache::put($cooldownKey, true, now()->addMinutes(30));
     }
 
-    /**
-     * Get the adaptive economy overrides for a bot (or empty array if none).
-     */
     public static function getAdaptiveEconomy(int $botId): array
     {
         return Cache::get("bot:{$botId}:adaptive_economy", []);
     }
 
-    /**
-     * Get the adaptive action probability overrides for a bot (or empty array if none).
-     */
     public static function getAdaptiveActionProbs(int $botId): array
     {
         return Cache::get("bot:{$botId}:adaptive_action_probs", []);

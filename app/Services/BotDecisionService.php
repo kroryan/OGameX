@@ -4,15 +4,14 @@ namespace OGame\Services;
 
 use OGame\Enums\BotActionType;
 use OGame\Enums\BotObjective;
+use OGame\Enums\BotPersonality;
 
 /**
- * BotDecisionService - Handles strategic decision making for playerbots.
+ * BotDecisionService - Enhanced strategic decision making for playerbots.
  *
- * This service implements a strategic decision-making system that:
- * 1. Analyzes the current game state
- * 2. Determines the appropriate objective based on personality and game phase
- * 3. Evaluates available options and scores them strategically
- * 4. Chooses the best action to advance the bot's objective
+ * Now integrates: strategic planning, intelligence data, threat maps,
+ * activity patterns, multi-action support, state machine, and
+ * personality-driven traits for human-like behavior.
  */
 class BotDecisionService
 {
@@ -21,6 +20,8 @@ class BotDecisionService
     private BotObjectiveService $objectiveService;
     private AdaptiveStrategyService $adaptiveStrategy;
     private BotLongTermStrategyService $longTermStrategy;
+    private BotStrategicPlannerService $planner;
+    private BotIntelligenceService $intelligence;
 
     public function __construct(BotService $botService)
     {
@@ -29,17 +30,28 @@ class BotDecisionService
         $this->objectiveService = new BotObjectiveService();
         $this->adaptiveStrategy = new AdaptiveStrategyService();
         $this->longTermStrategy = new BotLongTermStrategyService();
+        $this->planner = new BotStrategicPlannerService();
+        $this->intelligence = new BotIntelligenceService();
     }
 
     /**
-     * Decide the next action for the bot using strategic decision-making.
+     * Decide multiple actions for this tick (like a real player).
+     * Returns an array of actions to execute, up to $maxActions.
      */
-    public function decideNextAction(): ?BotActionType
+    public function decideActions(int $maxActions = 3): array
     {
-        // Step 1: Analyze current game state
         $state = $this->stateAnalyzer->analyzeCurrentState($this->botService);
+        $bot = $this->botService->getBot();
+        $botId = $bot->id;
 
-        $botId = $this->botService->getBot()->id;
+        // Ensure bot has strategic plans
+        try {
+            $this->planner->ensurePlans($this->botService);
+        } catch (\Exception $e) {
+            logger()->warning("Bot {$botId}: ensurePlans failed: {$e->getMessage()}");
+        }
+
+        // Check for intelligence data
         $state['has_attack_target'] = cache()->remember(
             "bot:{$botId}:has_attack_target",
             now()->addMinutes(5),
@@ -52,90 +64,281 @@ class BotDecisionService
             }
         );
 
-        // Adaptive tuning based on live metrics
+        // Adaptive tuning
         $this->adaptiveStrategy->adaptIfNeeded($this->botService, $state);
 
         $strategy = $this->longTermStrategy->getStrategy($this->botService, $state);
         $state['long_term_strategy'] = $strategy['strategy'] ?? 'balanced';
         $state['strategy_weights'] = $strategy['weights'] ?? [];
 
-        // Step 2: Determine objective based on personality and game phase
-        $objective = $this->objectiveService->determineObjective(
-            $this->botService->getBot(),
-            $state
-        );
+        // Determine objective
+        $objective = $this->objectiveService->determineObjective($bot, $state);
 
-        // Step 3: Get available options
-        $availableActions = $this->getAvailableActions($state);
+        // State machine: update bot state based on situation
+        $this->updateBotState($bot, $state);
+
+        // Collect actions
+        $actions = [];
+        $usedTypes = [];
+
+        for ($i = 0; $i < $maxActions; $i++) {
+            $action = $this->decideSingleAction($state, $objective, $usedTypes);
+            if ($action === null) {
+                break;
+            }
+            $actions[] = $action;
+            $usedTypes[] = $action->value;
+
+            // Some actions are exclusive (don't do attack + defend in same tick)
+            if (in_array($action, [BotActionType::ATTACK, BotActionType::DEFENSE])) {
+                break;
+            }
+        }
+
+        return $actions;
+    }
+
+    /**
+     * Legacy single action decision (backward compatible).
+     */
+    public function decideNextAction(): ?BotActionType
+    {
+        $actions = $this->decideActions(1);
+        return $actions[0] ?? null;
+    }
+
+    /**
+     * Decide a single action, optionally excluding already-chosen types.
+     */
+    private function decideSingleAction(array $state, BotObjective $objective, array $excludeTypes = []): ?BotActionType
+    {
+        // First: check if strategic plan has an actionable step
+        $planned = $this->getPlannedActionType($state, $excludeTypes);
+        if ($planned !== null) {
+            return $planned;
+        }
+
+        $availableActions = $this->getAvailableActions($state, $excludeTypes);
+
         if (empty($availableActions)) {
-            // Relax reserve to avoid long "no action" streaks in early game
-            if ($this->botService->canAffordAnyBuilding(true)) {
+            // Relax reserve
+            if (!in_array('build', $excludeTypes) && $this->botService->canAffordAnyBuilding(true)) {
                 $availableActions[] = BotActionType::BUILD;
-            } elseif ($this->botService->canAffordAnyResearch(true)) {
+            } elseif (!in_array('research', $excludeTypes) && $this->botService->canAffordAnyResearch(true)) {
                 $availableActions[] = BotActionType::RESEARCH;
-            } elseif ($this->botService->canAffordAnyUnit(true)) {
+            } elseif (!in_array('fleet', $excludeTypes) && $this->botService->canAffordAnyUnit(true)) {
                 $availableActions[] = BotActionType::FLEET;
             }
         }
+
+        // Ultimate fallback: diplomacy is always possible (alliance management, etc.)
+        if (empty($availableActions)) {
+            if (!in_array('diplomacy', $excludeTypes)) {
+                $availableActions[] = BotActionType::DIPLOMACY;
+            }
+        }
+
         if (empty($availableActions)) {
             return null;
         }
 
-        // Step 4: Score each option based on objective and state
+        // Score each action
         $scoredActions = [];
         foreach ($availableActions as $action) {
-            $scoredActions[$action->value] = $this->scoreAction(
-                $action,
-                $objective,
-                $state
-            );
+            $scoredActions[$action->value] = $this->scoreAction($action, $objective, $state);
         }
 
-        // Step 5: Choose action with highest score (with some randomness for variety)
         $bestAction = $this->selectBestAction($scoredActions);
-
-        // Log the decision for debugging
         $this->logDecision($objective, $scoredActions, $bestAction);
 
         return $bestAction;
     }
 
     /**
+     * Check if strategic plans suggest a specific action type.
+     */
+    private function getPlannedActionType(array $state, array $excludeTypes): ?BotActionType
+    {
+        try {
+            $planned = $this->planner->getNextPlannedAction($this->botService);
+            if (!$planned) {
+                return null;
+            }
+
+            $step = $planned['step'];
+            $type = match ($step['type'] ?? '') {
+                'building' => BotActionType::BUILD,
+                'research' => BotActionType::RESEARCH,
+                'unit' => BotActionType::FLEET,
+                default => null,
+            };
+
+            if ($type && !in_array($type->value, $excludeTypes)) {
+                // Store the planned step in cache for execution
+                $botId = $this->botService->getBot()->id;
+                cache()->put("bot:{$botId}:planned_step", $planned, now()->addMinutes(10));
+                return $type;
+            }
+        } catch (\Exception $e) {
+            logger()->warning("Bot: getPlannedActionType failed: {$e->getMessage()}");
+        }
+
+        return null;
+    }
+
+    /**
+     * Update bot state machine based on current situation.
+     */
+    private function updateBotState(\OGame\Models\Bot $bot, array $state): void
+    {
+        $currentState = $bot->getState();
+
+        if (!empty($state['is_under_threat'])) {
+            if ($currentState !== 'defending') {
+                $bot->setState('defending');
+            }
+            return;
+        }
+
+        // Transition logic
+        $newState = match (true) {
+            $state['game_phase'] === 'early' && ($state['total_points'] ?? 0) < 5000 => 'building',
+            ($state['can_colonize'] ?? false) && count($this->botService->getPlayer()->planets->all()) < 3 => 'colonizing',
+            ($state['has_significant_fleet'] ?? false) && ($state['has_attack_target'] ?? false) => 'raiding',
+            ($state['fleet_slot_usage'] ?? 0) > 0.6 => 'saving',
+            default => 'exploring',
+        };
+
+        if ($newState !== $currentState) {
+            $bot->setState($newState);
+        }
+    }
+
+    /**
      * Get actions that are currently available to the bot.
      */
-    private function getAvailableActions(array $state): array
+    private function getAvailableActions(array $state, array $excludeTypes = []): array
     {
         $actions = [];
-        $minResources = $state['min_resources_for_actions'] ?? 0;
-        $totalResources = $state['total_resources_sum'] ?? 0;
 
-        // Build is only available if we can afford at least one building
-        if (!$this->botService->shouldSkipAction('build') && ($state['can_afford_build'] ?? false) && !$state['all_building_queues_full']) {
+        // BUILD
+        if (!in_array('build', $excludeTypes)
+            && !$this->botService->shouldSkipAction('build')
+            && ($state['can_afford_build'] ?? false)
+            && !$state['all_building_queues_full']) {
             $actions[] = BotActionType::BUILD;
         }
 
-        // Research is only available if we have resources AND research queues are not all full
-        if (!$this->botService->shouldSkipAction('research') && $state['can_afford_research'] && !$state['all_research_queues_full']) {
+        // RESEARCH
+        if (!in_array('research', $excludeTypes)
+            && !$this->botService->shouldSkipAction('research')
+            && ($state['can_afford_research'] ?? false)
+            && !$state['all_research_queues_full']) {
             $actions[] = BotActionType::RESEARCH;
         }
 
-        // Fleet is always available (unit queue is unlimited) if we have resources
-        if (!$this->botService->shouldSkipAction('fleet') && $state['can_afford_fleet']) {
+        // FLEET
+        if (!in_array('fleet', $excludeTypes)
+            && !$this->botService->shouldSkipAction('fleet')
+            && ($state['can_afford_fleet'] ?? false)) {
             $actions[] = BotActionType::FLEET;
         }
 
-        // Attack is only available if not on cooldown and has fleet
+        // ATTACK
         $slotUsage = (float) ($state['fleet_slot_usage'] ?? 0.0);
-        if (!$this->botService->shouldSkipAction('attack') && $this->botService->canAttack() && $this->botService->hasFleetSlotsAvailable() && $state['has_significant_fleet'] && !empty($state['has_attack_target']) && $slotUsage < 0.9) {
+        if (!in_array('attack', $excludeTypes)
+            && !$this->botService->shouldSkipAction('attack')
+            && $this->botService->canAttack()
+            && $this->botService->hasFleetSlotsAvailable()
+            && ($state['has_significant_fleet'] ?? false)
+            && !empty($state['has_attack_target'])
+            && $slotUsage < 0.9) {
             $actions[] = BotActionType::ATTACK;
         }
 
-        // Trade/transport if resource imbalance exists
-        if (!$this->botService->shouldSkipAction('trade') && $this->botService->shouldTradeResources()) {
+        // TRADE
+        if (!in_array('trade', $excludeTypes)
+            && !$this->botService->shouldSkipAction('trade')
+            && $this->botService->shouldTradeResources()) {
             $actions[] = BotActionType::TRADE;
         }
 
+        // ESPIONAGE (new) - proactive espionage
+        if (!in_array('espionage', $excludeTypes)
+            && $this->botService->hasFleetSlotsAvailable()
+            && $slotUsage < 0.7
+            && $this->shouldDoProactiveEspionage($state)) {
+            $actions[] = BotActionType::ESPIONAGE;
+        }
+
+        // DEFENSE (new) - proactive defense building
+        if (!in_array('defense', $excludeTypes)
+            && !$this->botService->shouldSkipAction('build')
+            && ($state['can_afford_fleet'] ?? false)
+            && $this->shouldBuildDefense($state)) {
+            $actions[] = BotActionType::DEFENSE;
+        }
+
+        // DIPLOMACY (new) - alliance and social actions
+        if (!in_array('diplomacy', $excludeTypes)
+            && mt_rand(1, 20) === 1) { // 5% chance per tick
+            $actions[] = BotActionType::DIPLOMACY;
+        }
+
         return $actions;
+    }
+
+    /**
+     * Should the bot proactively spy on neighbors?
+     */
+    private function shouldDoProactiveEspionage(array $state): bool
+    {
+        $bot = $this->botService->getBot();
+        $personality = $bot->getPersonalityEnum();
+
+        // Scientists and Raiders love espionage
+        $chance = match ($personality) {
+            BotPersonality::RAIDER, BotPersonality::AGGRESSIVE => 30,
+            BotPersonality::SCIENTIST, BotPersonality::BALANCED => 20,
+            BotPersonality::DIPLOMAT, BotPersonality::EXPLORER => 15,
+            default => 10,
+        };
+
+        // Boost if we have espionage probes
+        $planet = $this->botService->getRichestPlanet();
+        if ($planet && $planet->getObjectAmount('espionage_probe') < 2) {
+            return false;
+        }
+
+        return mt_rand(1, 100) <= $chance;
+    }
+
+    /**
+     * Should the bot proactively build defenses?
+     */
+    private function shouldBuildDefense(array $state): bool
+    {
+        $bot = $this->botService->getBot();
+        $personality = $bot->getPersonalityEnum();
+        $defensePoints = $state['defense_points'] ?? 0;
+        $buildingPoints = $state['building_points'] ?? 0;
+
+        // Turtles and defensive bots always want defenses
+        if (in_array($personality, [BotPersonality::TURTLE, BotPersonality::DEFENSIVE])) {
+            return mt_rand(1, 100) <= 40;
+        }
+
+        // All bots should build some defense if ratio is too low
+        if ($buildingPoints > 5000 && $defensePoints < $buildingPoints * 0.1) {
+            return mt_rand(1, 100) <= 25;
+        }
+
+        // Counter-espionage triggered: someone is scouting us
+        if (($bot->espionage_counter ?? 0) > 2) {
+            return mt_rand(1, 100) <= 35;
+        }
+
+        return false;
     }
 
     /**
@@ -144,40 +347,132 @@ class BotDecisionService
     private function scoreAction(BotActionType $action, BotObjective $objective, array $state): float
     {
         $score = 0.0;
+        $bot = $this->botService->getBot();
 
-        // Base score from objective weights (0-100)
+        // Base score from objective weights
         $weights = $objective->getActionWeights();
         $baseScore = $weights[$action->value] ?? 10;
         $score += $baseScore;
 
+        // Strategy weights
         $strategyWeights = $state['strategy_weights'] ?? [];
         if (!empty($strategyWeights[$action->value])) {
             $score *= (float) $strategyWeights[$action->value];
         }
 
-        // Apply bot-specific action probabilities
-        $probWeights = $this->botService->getBot()->getActionProbabilities();
+        // Bot-specific action probabilities
+        $probWeights = $bot->getActionProbabilities();
         $probModifier = ($probWeights[$action->value] ?? 100) / 100;
         $score *= $probModifier;
 
-        // Apply modifiers based on game phase
+        // Phase modifier
         $phaseModifier = $this->getPhaseModifier($action, $state['game_phase']);
         $score *= $phaseModifier;
 
-        // Apply modifiers based on current state
+        // State modifier
         $stateModifier = $this->getStateModifier($action, $state);
         $score *= $stateModifier;
 
-        // Add strategic bonus for certain combinations
+        // Strategic bonus
         $strategicBonus = $this->getStrategicBonus($action, $objective, $state);
         $score += $strategicBonus;
+
+        // Trait bonuses
+        $traitBonus = $this->getTraitBonus($action, $bot, $state);
+        $score += $traitBonus;
+
+        // Risk tolerance modifier
+        $riskMod = $this->getRiskModifier($action, $bot->getRiskTolerance());
+        $score *= $riskMod;
 
         // ROI/risk adjustments
         $score += $this->getRoiBonus($action, $state);
         $score -= $this->getRiskPenalty($action, $state);
 
-        // Ensure minimum score
         return max(1.0, $score);
+    }
+
+    /**
+     * Get trait-based bonus for an action.
+     */
+    private function getTraitBonus(BotActionType $action, \OGame\Models\Bot $bot, array $state): float
+    {
+        $bonus = 0.0;
+        $traits = $bot->getTraits();
+
+        if (in_array('vengeful', $traits) && $action === BotActionType::ATTACK) {
+            // Vengeful bots attack more after being attacked
+            if (($bot->espionage_counter ?? 0) > 0 || !empty($state['is_under_threat'])) {
+                $bonus += 20;
+            }
+        }
+
+        if (in_array('opportunistic', $traits)) {
+            if ($action === BotActionType::ATTACK && !empty($state['has_attack_target'])) {
+                $bonus += 15;
+            }
+            if ($action === BotActionType::TRADE && !empty($state['is_storage_pressure_high'])) {
+                $bonus += 10;
+            }
+        }
+
+        if (in_array('cautious', $traits)) {
+            if ($action === BotActionType::DEFENSE) {
+                $bonus += 15;
+            }
+            if ($action === BotActionType::ATTACK) {
+                $bonus -= 10;
+            }
+        }
+
+        if (in_array('impatient', $traits)) {
+            if ($action === BotActionType::ATTACK || $action === BotActionType::FLEET) {
+                $bonus += 10;
+            }
+            if ($action === BotActionType::RESEARCH) {
+                $bonus -= 5;
+            }
+        }
+
+        if (in_array('patient', $traits)) {
+            if ($action === BotActionType::RESEARCH || $action === BotActionType::BUILD) {
+                $bonus += 10;
+            }
+        }
+
+        if (in_array('social', $traits) && $action === BotActionType::DIPLOMACY) {
+            $bonus += 20;
+        }
+
+        if (in_array('adventurous', $traits) && $action === BotActionType::FLEET) {
+            $bonus += 10; // Loves expeditions
+        }
+
+        if (in_array('methodical', $traits)) {
+            if ($action === BotActionType::RESEARCH) {
+                $bonus += 15;
+            }
+            if ($action === BotActionType::ESPIONAGE) {
+                $bonus += 10;
+            }
+        }
+
+        return $bonus;
+    }
+
+    /**
+     * Modify score based on risk tolerance.
+     */
+    private function getRiskModifier(BotActionType $action, int $riskTolerance): float
+    {
+        $riskFactor = $riskTolerance / 50.0; // 0.0-2.0 range
+
+        return match ($action) {
+            BotActionType::ATTACK => 0.5 + ($riskFactor * 0.5), // 0.5-1.5
+            BotActionType::DEFENSE => 1.5 - ($riskFactor * 0.3), // 0.9-1.5
+            BotActionType::ESPIONAGE => 0.8 + ($riskFactor * 0.2), // 0.8-1.2
+            default => 1.0,
+        };
     }
 
     /**
@@ -192,6 +487,9 @@ class BotDecisionService
                 BotActionType::FLEET->value => 0.5,
                 BotActionType::ATTACK->value => 0.2,
                 BotActionType::TRADE->value => 0.6,
+                BotActionType::ESPIONAGE->value => 0.3,
+                BotActionType::DEFENSE->value => 0.4,
+                BotActionType::DIPLOMACY->value => 0.5,
             ],
             'mid' => [
                 BotActionType::BUILD->value => 1.0,
@@ -199,6 +497,9 @@ class BotDecisionService
                 BotActionType::FLEET->value => 1.2,
                 BotActionType::ATTACK->value => 1.0,
                 BotActionType::TRADE->value => 1.0,
+                BotActionType::ESPIONAGE->value => 1.2,
+                BotActionType::DEFENSE->value => 1.0,
+                BotActionType::DIPLOMACY->value => 1.0,
             ],
             'late' => [
                 BotActionType::BUILD->value => 0.7,
@@ -206,6 +507,9 @@ class BotDecisionService
                 BotActionType::FLEET->value => 1.3,
                 BotActionType::ATTACK->value => 1.4,
                 BotActionType::TRADE->value => 1.1,
+                BotActionType::ESPIONAGE->value => 1.3,
+                BotActionType::DEFENSE->value => 0.8,
+                BotActionType::DIPLOMACY->value => 1.2,
             ],
         ];
 
@@ -219,22 +523,15 @@ class BotDecisionService
     {
         $modifier = 1.0;
 
-        // Resource availability modifier
-        $totalMetal = $state['total_resources']['metal'];
-        $totalCrystal = $state['total_resources']['crystal'];
-        $totalDeut = $state['total_resources']['deuterium'];
-        $totalResources = $totalMetal + $totalCrystal + $totalDeut;
-
         switch ($action->value) {
             case 'build':
-                // If storage is nearly full, prioritize building
                 $richestPlanet = $this->botService->getRichestPlanet();
                 if ($richestPlanet) {
                     $resources = $richestPlanet->getResources();
                     $metalMax = $richestPlanet->metalStorage()->get();
                     $usagePercent = $metalMax > 0 ? $resources->metal->get() / $metalMax : 0;
                     if ($usagePercent > 0.9) {
-                        $modifier = 1.5; // Urgent to spend
+                        $modifier = 1.5;
                     }
                 }
                 if (!empty($state['is_under_threat'])) {
@@ -243,15 +540,11 @@ class BotDecisionService
                 break;
 
             case 'fleet':
-                // If already have significant fleet, reduce priority
-                if ($state['fleet_points'] > 200000) {
+                if (($state['fleet_points'] ?? 0) > 200000) {
                     $modifier = 0.7;
                 }
                 if (!empty($state['is_under_threat'])) {
                     $modifier *= 1.4;
-                }
-                if (empty($state['fleet_slots_available'])) {
-                    $modifier *= 0.4;
                 }
                 if (($state['fleet_slot_usage'] ?? 0.0) > 0.8) {
                     $modifier *= 0.6;
@@ -259,19 +552,14 @@ class BotDecisionService
                 break;
 
             case 'attack':
-                // Higher modifier if bot has strong fleet
-                if ($state['has_significant_fleet']) {
+                if ($state['has_significant_fleet'] ?? false) {
                     $modifier = 1.3;
                 }
-                // Reduce if resources are low (need to rebuild)
-                if ($totalResources < 100000) {
+                if (($state['total_resources_sum'] ?? 0) < 100000) {
                     $modifier = 0.5;
                 }
                 if (!empty($state['is_under_threat'])) {
                     $modifier *= 0.6;
-                }
-                if (empty($state['has_attack_target'])) {
-                    $modifier *= 0.4;
                 }
                 if (($state['fleet_slot_usage'] ?? 0.0) > 0.85) {
                     $modifier *= 0.5;
@@ -279,20 +567,43 @@ class BotDecisionService
                 break;
 
             case 'research':
-                // Boost if research is low compared to buildings
-                if ($state['research_points'] < $state['building_points'] * 0.5) {
+                if (($state['research_points'] ?? 0) < ($state['building_points'] ?? 0) * 0.5) {
                     $modifier = 1.4;
                 }
                 if (!empty($state['is_under_threat'])) {
                     $modifier *= 0.8;
                 }
                 break;
+
             case 'trade':
-                // Stronger if storage is near full
-                $modifier = $this->botService->isStoragePressureHigh() ? 1.5 : 1.1;
+                $modifier = ($this->botService->isStoragePressureHigh()) ? 1.5 : 1.1;
                 if (($state['resource_imbalance'] ?? 0.0) > 0.4) {
                     $modifier *= 1.3;
                 }
+                break;
+
+            case 'espionage':
+                $modifier = 1.0;
+                // Boost espionage if we're about to attack
+                if (($state['has_significant_fleet'] ?? false) && ($state['fleet_slot_usage'] ?? 0.0) < 0.5) {
+                    $modifier = 1.5;
+                }
+                break;
+
+            case 'defense':
+                if (!empty($state['is_under_threat'])) {
+                    $modifier = 2.0;
+                }
+                $defenseRatio = ($state['building_points'] ?? 0) > 0
+                    ? ($state['defense_points'] ?? 0) / ($state['building_points'] ?? 1)
+                    : 0;
+                if ($defenseRatio < 0.1) {
+                    $modifier *= 1.5;
+                }
+                break;
+
+            case 'diplomacy':
+                $modifier = 0.8; // Low base modifier, boosted by traits
                 break;
         }
 
@@ -324,9 +635,6 @@ class BotDecisionService
                 if (($state['fleet_points'] ?? 0) < ($state['building_points'] ?? 0) * 0.3) {
                     $bonus += 10;
                 }
-                if ($resourceSum > 20000) {
-                    $bonus += 5;
-                }
                 break;
             case BotActionType::ATTACK:
                 if (!empty($state['has_attack_target'])) {
@@ -336,6 +644,13 @@ class BotDecisionService
             case BotActionType::TRADE:
                 $imbalance = (float) ($state['resource_imbalance'] ?? 0.0);
                 $bonus += min(20, $imbalance * 30);
+                break;
+            case BotActionType::DEFENSE:
+                if (($state['defense_points'] ?? 0) < ($state['building_points'] ?? 0) * 0.15) {
+                    $bonus += 20;
+                }
+                break;
+            default:
                 break;
         }
 
@@ -359,10 +674,6 @@ class BotDecisionService
             $penalty += 20;
         }
 
-        if (empty($state['fleet_slots_available']) && $action === BotActionType::FLEET) {
-            $penalty += 15;
-        }
-
         return $penalty;
     }
 
@@ -373,73 +684,52 @@ class BotDecisionService
     {
         $bonus = 0.0;
 
-        // Special bonuses for certain combinations
-        switch ($objective->value) {
-            case BotObjective::ECONOMIC_GROWTH->value:
-                if ($action === BotActionType::BUILD) {
-                    // Extra bonus for building when focused on economy
-                    $bonus += 30;
-                }
-                if ($action === BotActionType::RESEARCH) {
-                    // Bonus for energy/production techs
-                    $bonus += 15;
-                }
-                if ($action === BotActionType::TRADE) {
-                    $bonus += 20;
-                }
+        switch ($objective) {
+            case BotObjective::ECONOMIC_GROWTH:
+                if ($action === BotActionType::BUILD) $bonus += 30;
+                if ($action === BotActionType::RESEARCH) $bonus += 15;
+                if ($action === BotActionType::TRADE) $bonus += 20;
                 break;
 
-            case BotObjective::FLEET_ACCUMULATION->value:
-                if ($action === BotActionType::FLEET) {
-                    $bonus += 40;
-                }
-                if ($action === BotActionType::ATTACK && $state['has_significant_fleet']) {
-                    // Bonus for using fleet when it's significant
-                    $bonus += 20;
-                }
+            case BotObjective::FLEET_ACCUMULATION:
+                if ($action === BotActionType::FLEET) $bonus += 40;
+                if ($action === BotActionType::ATTACK && ($state['has_significant_fleet'] ?? false)) $bonus += 20;
                 break;
 
-            case BotObjective::DEFENSIVE_FORTIFICATION->value:
-                if ($action === BotActionType::BUILD) {
-                    // Build defenses
-                    $bonus += 35;
-                }
-                if ($action === BotActionType::RESEARCH) {
-                    // Defense techs
-                    $bonus += 20;
-                }
-                if ($action === BotActionType::FLEET) {
-                    $bonus += 10;
-                }
+            case BotObjective::DEFENSIVE_FORTIFICATION:
+                if ($action === BotActionType::BUILD) $bonus += 25;
+                if ($action === BotActionType::DEFENSE) $bonus += 40;
+                if ($action === BotActionType::RESEARCH) $bonus += 15;
                 break;
 
-            case BotObjective::TERRITORIAL_EXPANSION->value:
-                if ($action === BotActionType::RESEARCH) {
-                    // Astrophysics is crucial for expansion
-                    $bonus += 35;
-                }
+            case BotObjective::TERRITORIAL_EXPANSION:
+                if ($action === BotActionType::RESEARCH) $bonus += 35;
                 if ($action === BotActionType::FLEET) {
-                    // Need colony ships
                     $bonus += 25;
-                    if ($this->botService->shouldColonize()) {
-                        $bonus += 25;
-                    }
-                }
-                if ($action === BotActionType::TRADE) {
-                    $bonus += 10;
+                    if ($this->botService->shouldColonize()) $bonus += 25;
                 }
                 break;
 
-            case BotObjective::RAIDING_AND_PROFIT->value:
-                if ($action === BotActionType::ATTACK) {
-                    $bonus += 50;
-                }
-                if ($action === BotActionType::FLEET) {
-                    $bonus += 30;
-                }
-                if ($action === BotActionType::TRADE) {
-                    $bonus += 5;
-                }
+            case BotObjective::RAIDING_AND_PROFIT:
+                if ($action === BotActionType::ATTACK) $bonus += 50;
+                if ($action === BotActionType::FLEET) $bonus += 30;
+                if ($action === BotActionType::ESPIONAGE) $bonus += 25;
+                break;
+
+            case BotObjective::TECH_RUSH:
+                if ($action === BotActionType::RESEARCH) $bonus += 50;
+                if ($action === BotActionType::BUILD) $bonus += 15;
+                break;
+
+            case BotObjective::INTELLIGENCE_GATHERING:
+                if ($action === BotActionType::ESPIONAGE) $bonus += 45;
+                if ($action === BotActionType::ATTACK) $bonus += 15;
+                break;
+
+            case BotObjective::ALLIANCE_WARFARE:
+                if ($action === BotActionType::ATTACK) $bonus += 35;
+                if ($action === BotActionType::FLEET) $bonus += 25;
+                if ($action === BotActionType::DIPLOMACY) $bonus += 20;
                 break;
         }
 
@@ -448,18 +738,12 @@ class BotDecisionService
 
     /**
      * Select the best action from scored options.
-     * Uses weighted random selection to add variety while preferring better options.
      */
     private function selectBestAction(array $scoredActions): BotActionType
     {
-        // Sort by score (descending)
         arsort($scoredActions);
-
-        // Get top 3 actions
         $topActions = array_slice($scoredActions, 0, 3, true);
 
-        // Use integer-based weighted random to avoid float precision issues.
-        // Multiply all scores by 100 and work with integers.
         $intWeights = [];
         foreach ($topActions as $action => $score) {
             $intWeights[$action] = max(1, (int) round($score * 100));
@@ -476,44 +760,50 @@ class BotDecisionService
             }
         }
 
-        // Fallback to highest score
         return BotActionType::from(array_key_first($scoredActions));
     }
 
     /**
-     * Log decision for debugging purposes.
+     * Log decision for debugging.
      */
     private function logDecision(BotObjective $objective, array $scoredActions, BotActionType $chosen): void
     {
-        // Only log occasionally to avoid spam
-        if (mt_rand(1, 10) !== 1) {
+        if (mt_rand(1, 5) !== 1) {
             return;
         }
 
-        $bot = $this->botService->getBot();
         $actionScores = [];
         foreach ($scoredActions as $action => $score) {
-            $actionScores[] = "{$action}:{$score}";
+            $actionScores[] = "{$action}:" . round($score, 1);
         }
 
+        $bot = $this->botService->getBot();
         $this->botService->logAction(
-            BotActionType::BUILD, // Use BUILD as category for decision logs
-            "Strategic Decision - Objective: {$objective->value}, Chosen: {$chosen->value}, Scores: " . implode(', ', $actionScores),
+            BotActionType::BUILD,
+            "Decision [state:{$bot->getState()}] Obj:{$objective->value}, Pick:{$chosen->value}, Scores:" . implode(',', $actionScores),
             []
         );
     }
 
     /**
-     * Check if bot should perform expedition based on chance and strategic context.
+     * Check if bot should perform expedition.
      */
     public function shouldDoExpedition(): bool
     {
         $chance = config('bots.expedition_chance', 0.15);
+        $bot = $this->botService->getBot();
+        $personality = $bot->getPersonalityEnum();
 
-        // Reduce expedition chance in early game
+        // Explorers love expeditions
+        if ($personality === BotPersonality::EXPLORER) {
+            $chance *= 2.5;
+        }
+
         $state = $this->stateAnalyzer->analyzeCurrentState($this->botService);
         if ($state['game_phase'] === 'early') {
             $chance *= 0.5;
+        } elseif ($state['game_phase'] === 'late') {
+            $chance *= 1.5;
         }
 
         return mt_rand(1, 100) <= ($chance * 100);

@@ -558,6 +558,89 @@ class BotManagementController extends OGameController
         ]);
     }
 
+    /**
+     * Bulk delete bots with exclusion options.
+     */
+    public function bulkDelete(Request $request): RedirectResponse
+    {
+        $validated = $request->validate([
+            'exclude_player_bots' => 'nullable|boolean',
+            'exclude_names' => 'nullable|string|max:2000',
+            'exclude_bot_ids' => 'nullable|array',
+            'exclude_bot_ids.*' => 'integer|exists:bots,id',
+        ]);
+
+        $excludePlayerBots = !empty($validated['exclude_player_bots']);
+        $excludeNames = array_filter(array_map('trim', explode(',', $validated['exclude_names'] ?? '')));
+        $excludeBotIds = $validated['exclude_bot_ids'] ?? [];
+
+        $query = Bot::query();
+
+        // Exclude bots that have a real player controlling them (user has logged in recently)
+        if ($excludePlayerBots) {
+            $query->whereHas('user', function ($q) {
+                // A "player-bot" is a bot whose user account has logged in within the last 7 days
+                $q->where('time', '>=', now()->subDays(7)->timestamp);
+            });
+            $playerBotIds = (clone $query)->pluck('id')->toArray();
+            $excludeBotIds = array_unique(array_merge($excludeBotIds, $playerBotIds));
+            $query = Bot::query(); // Reset query
+        }
+
+        // Exclude by name
+        if (!empty($excludeNames)) {
+            $nameExcludedIds = Bot::where(function ($q) use ($excludeNames) {
+                foreach ($excludeNames as $name) {
+                    $q->orWhere('name', 'like', '%' . $name . '%');
+                }
+            })->pluck('id')->toArray();
+            $excludeBotIds = array_unique(array_merge($excludeBotIds, $nameExcludedIds));
+        }
+
+        // Exclude specific IDs
+        if (!empty($excludeBotIds)) {
+            $query->whereNotIn('id', $excludeBotIds);
+        }
+
+        $botsToDelete = $query->get();
+        $count = $botsToDelete->count();
+
+        if ($count === 0) {
+            return redirect()
+                ->route('admin.bots.index')
+                ->with('error', 'No bots matched for deletion (all excluded).');
+        }
+
+        // Delete bot logs first, then bots
+        $botIds = $botsToDelete->pluck('id')->toArray();
+        BotLog::whereIn('bot_id', $botIds)->delete();
+
+        // Delete related data
+        foreach ([
+            \OGame\Models\BotIntel::class,
+            \OGame\Models\BotStrategicPlan::class,
+            \OGame\Models\BotPlanetPlan::class,
+            \OGame\Models\BotThreatMap::class,
+            \OGame\Models\BotActivityPattern::class,
+            \OGame\Models\BotBattleHistory::class,
+            \OGame\Models\BotExpeditionLog::class,
+        ] as $model) {
+            try {
+                $model::whereIn('bot_id', $botIds)->delete();
+            } catch (\Exception $e) {
+                // Table may not exist yet, skip
+            }
+        }
+
+        Bot::whereIn('id', $botIds)->delete();
+
+        $excludedCount = count($excludeBotIds);
+
+        return redirect()
+            ->route('admin.bots.index')
+            ->with('success', "Deleted {$count} bot(s). {$excludedCount} bot(s) excluded.");
+    }
+
     private function sanitizeEmailLocalPart(string $value): string
     {
         $value = strtolower(trim($value));

@@ -265,6 +265,55 @@
                         </form>
                     </div>
 
+                    <!-- Bulk Delete Bots -->
+                    <div class="group bborder" style="margin-bottom: 20px;">
+                        <p class="box_highlight textCenter" style="background-color: #400; color: #f88;">Bulk Delete Bots</p>
+                        <form action="{{ route('admin.bots.bulk-delete') }}" method="POST" id="bulkDeleteForm">
+                            @csrf
+                            <table class="table" style="width: 100%;">
+                                <tr>
+                                    <td style="width: 30%;">Exclude Player-Bots</td>
+                                    <td>
+                                        <label>
+                                            <input type="checkbox" name="exclude_player_bots" value="1" checked>
+                                            Exclude bots controlled by real players (logged in within 7 days)
+                                        </label>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td>Exclude by Name</td>
+                                    <td>
+                                        <input type="text" name="exclude_names" class="textInput w200 textBeefy" placeholder="e.g. kroryan, adryla">
+                                        <div style="font-size: 0.8em; color: #666; margin-top: 4px;">
+                                            Comma-separated names. Bots whose name contains any of these strings will be excluded.
+                                        </div>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td>Exclude Specific Bots</td>
+                                    <td>
+                                        <div style="max-height: 150px; overflow-y: auto; border: 1px solid #333; border-radius: 4px; padding: 8px; background: #1a1a1a;">
+                                            @foreach ($bots as $bot)
+                                                <label style="display: block; padding: 2px 0; cursor: pointer;">
+                                                    <input type="checkbox" name="exclude_bot_ids[]" value="{{ $bot->id }}">
+                                                    <span style="color: #ccc;">#{{ $bot->id }}</span>
+                                                    <strong>{{ $bot->name }}</strong>
+                                                    <span style="color: #888; font-size: 0.9em;">({{ $bot->user->username ?? 'N/A' }} - {{ ucfirst($bot->personality) }})</span>
+                                                </label>
+                                            @endforeach
+                                        </div>
+                                    </td>
+                                </tr>
+                            </table>
+                            <div style="text-align: center; margin-top: 10px;">
+                                <button type="submit" class="btn_blue" style="background-color: #c00; border-color: #a00;"
+                                    onclick="return confirm('WARNING: This will permanently delete all bots except excluded ones.\n\nAre you sure?');">
+                                    Delete All Bots (except excluded)
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+
                     <!-- Bots List -->
                     <p class="box_highlight textCenter">Bots List ({{ $bots->count() }})</p>
                     @if ($bots->count() > 0)

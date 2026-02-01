@@ -14,7 +14,7 @@ return [
     'scheduler_enabled' => env('BOTS_SCHEDULER_ENABLED', true),
 
     // How often (in minutes) the bot scheduler should run
-    'scheduler_interval_minutes' => env('BOTS_SCHEDULER_INTERVAL', 5),
+    'scheduler_interval_minutes' => env('BOTS_SCHEDULER_INTERVAL', 10),
 
     // Number of bots to process per scheduler run (prevents long locks)
     'scheduler_batch_size' => env('BOTS_SCHEDULER_BATCH_SIZE', 200),
@@ -46,9 +46,9 @@ return [
     'max_research_level' => 10,
 
     // Default activity cycle when no schedule is defined
-    // Bots are active for 20 minutes every 4 hours by default.
-    'default_activity_cycle_minutes' => 240,
-    'default_activity_window_minutes' => 20,
+    // Bots are active continuously by default (window >= cycle disables cycling).
+    'default_activity_cycle_minutes' => 60,
+    'default_activity_window_minutes' => 60,
 
     // Strategic thresholds and tuning
     'espionage_report_max_age_minutes' => 20,

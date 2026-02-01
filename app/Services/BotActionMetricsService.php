@@ -3,6 +3,7 @@
 namespace OGame\Services;
 
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use OGame\Models\BotLog;
 
 /**
@@ -22,40 +23,52 @@ class BotActionMetricsService
         }
 
         $from = now()->subDays($windowDays);
-        $logs = BotLog::where('action_type', 'attack')
-            ->where('created_at', '>=', $from)
-            ->get();
 
-        $total = $logs->count();
+        // Use SQL aggregation instead of loading all logs into memory.
+        $stats = BotLog::where('action_type', 'attack')
+            ->where('created_at', '>=', $from)
+            ->selectRaw('COUNT(*) as total, SUM(CASE WHEN result = ? THEN 1 ELSE 0 END) as success_count', ['success'])
+            ->first();
+
+        $total = (int) ($stats->total ?? 0);
         if ($total < $minSamples) {
             $payload = ['sampled' => false, 'total' => $total];
             Cache::put($cacheKey, $payload, now()->addMinutes(30));
             return $payload;
         }
 
-        $success = $logs->where('result', 'success')->count();
-        $successRate = $total > 0 ? $success / $total : 0.0;
+        $successCount = (int) ($stats->success_count ?? 0);
+        $successRate = $total > 0 ? $successCount / $total : 0.0;
 
-        $consumption = $logs->where('result', 'success')
-            ->map(fn ($l) => $l->resources_spended['consumption'] ?? null)
+        // For medians, use a limited query to avoid loading everything.
+        $consumptionValues = BotLog::where('action_type', 'attack')
+            ->where('created_at', '>=', $from)
+            ->where('result', 'success')
+            ->whereNotNull('resources_spended')
+            ->pluck('resources_spended')
+            ->map(fn ($r) => is_array($r) ? ($r['consumption'] ?? null) : null)
             ->filter()
-            ->values()
             ->sort()
-            ->values();
+            ->values()
+            ->all();
 
-        $loot = $logs->filter(fn ($l) => str_contains((string) $l->action_description, 'loot'))
-            ->map(fn ($l) => $l->resources_spended['loot'] ?? null)
+        $lootValues = BotLog::where('action_type', 'attack')
+            ->where('created_at', '>=', $from)
+            ->where('action_description', 'like', '%loot%')
+            ->whereNotNull('resources_spended')
+            ->pluck('resources_spended')
+            ->map(fn ($r) => is_array($r) ? ($r['loot'] ?? null) : null)
             ->filter()
-            ->values()
             ->sort()
-            ->values();
+            ->values()
+            ->all();
 
         $payload = [
             'sampled' => true,
             'total' => $total,
             'success_rate' => $successRate,
-            'consumption_median' => $this->median($consumption->all()),
-            'loot_median' => $this->median($loot->all()),
+            'consumption_median' => $this->median($consumptionValues),
+            'loot_median' => $this->median($lootValues),
         ];
 
         Cache::put($cacheKey, $payload, now()->addMinutes(30));
@@ -74,19 +87,22 @@ class BotActionMetricsService
         }
 
         $from = now()->subDays($windowDays);
-        $logs = BotLog::where('action_type', 'trade')
-            ->where('created_at', '>=', $from)
-            ->get();
 
-        $total = $logs->count();
+        // Use SQL aggregation instead of loading all logs into memory.
+        $stats = BotLog::where('action_type', 'trade')
+            ->where('created_at', '>=', $from)
+            ->selectRaw('COUNT(*) as total, SUM(CASE WHEN result = ? THEN 1 ELSE 0 END) as success_count', ['success'])
+            ->first();
+
+        $total = (int) ($stats->total ?? 0);
         if ($total < $minSamples) {
             $payload = ['sampled' => false, 'total' => $total];
             Cache::put($cacheKey, $payload, now()->addMinutes(30));
             return $payload;
         }
 
-        $success = $logs->where('result', 'success')->count();
-        $successRate = $total > 0 ? $success / $total : 0.0;
+        $successCount = (int) ($stats->success_count ?? 0);
+        $successRate = $total > 0 ? $successCount / $total : 0.0;
 
         $payload = [
             'sampled' => true,

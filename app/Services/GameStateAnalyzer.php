@@ -2,10 +2,6 @@
 
 namespace OGame\Services;
 
-use OGame\Enums\BotObjective;
-use OGame\Enums\BotPersonality;
-use OGame\Models\Bot;
-
 /**
  * GameStateAnalyzer - Analyzes the current game state for strategic decision-making.
  */
@@ -18,9 +14,39 @@ class GameStateAnalyzer
     private const MID_GAME_THRESHOLD = 1000000;
 
     /**
+     * In-memory cache of state per bot id within the same request/tick.
+     * @var array<int, array>
+     */
+    private static array $stateCache = [];
+
+    /**
+     * Clear the per-tick cache (call at the start of each bot processing cycle).
+     */
+    public static function clearCache(): void
+    {
+        self::$stateCache = [];
+    }
+
+    /**
      * Analyze the current state of the bot.
+     * Results are cached per bot id within the same request to avoid redundant queries.
      */
     public function analyzeCurrentState(BotService $botService): array
+    {
+        $botId = $botService->getBot()->id;
+        if (isset(self::$stateCache[$botId])) {
+            return self::$stateCache[$botId];
+        }
+
+        $state = $this->doAnalyzeCurrentState($botService);
+        self::$stateCache[$botId] = $state;
+        return $state;
+    }
+
+    /**
+     * Perform the actual state analysis.
+     */
+    private function doAnalyzeCurrentState(BotService $botService): array
     {
         $player = $botService->getPlayer();
         $planets = $player->planets->all();
@@ -148,48 +174,6 @@ class GameStateAnalyzer
         } else {
             return 'late';
         }
-    }
-
-    /**
-     * Determine the best objective for the bot based on personality and game state.
-     */
-    public function determineObjective(Bot $bot, array $state): BotObjective
-    {
-        $personality = $bot->getPersonalityEnum();
-        $phase = $state['game_phase'];
-        $points = $state['total_points'];
-
-        // Early game: always focus on economy first
-        if ($phase === 'early') {
-            return BotObjective::ECONOMIC_GROWTH;
-        }
-
-        // Mid game: specialize based on personality
-        if ($phase === 'mid') {
-            return match ($personality) {
-                BotPersonality::AGGRESSIVE => BotObjective::FLEET_ACCUMULATION,
-                BotPersonality::DEFENSIVE => BotObjective::DEFENSIVE_FORTIFICATION,
-                BotPersonality::ECONOMIC => BotObjective::ECONOMIC_GROWTH,
-                BotPersonality::BALANCED => BotObjective::TERRITORIAL_EXPANSION,
-            };
-        }
-
-        // Late game: full specialization
-        if ($phase === 'late') {
-            // Aggressive bots switch to raiding if they have fleet
-            if ($personality === BotPersonality::AGGRESSIVE && $state['has_significant_fleet']) {
-                return BotObjective::RAIDING_AND_PROFIT;
-            }
-
-            return match ($personality) {
-                BotPersonality::AGGRESSIVE => BotObjective::FLEET_ACCUMULATION,
-                BotPersonality::DEFENSIVE => BotObjective::DEFENSIVE_FORTIFICATION,
-                BotPersonality::ECONOMIC => BotObjective::ECONOMIC_GROWTH,
-                BotPersonality::BALANCED => BotObjective::RAIDING_AND_PROFIT,
-            };
-        }
-
-        return BotObjective::ECONOMIC_GROWTH;
     }
 
     private function calculateResourceImbalance(array $resources): float

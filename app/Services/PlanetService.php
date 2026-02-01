@@ -792,7 +792,14 @@ class PlanetService
                 );
         }
 
-        $time_seconds = (int)($time_hours * 3600);
+        $time_seconds_float = $time_hours * 3600;
+
+        // Clamp to PHP_INT_MAX to prevent float-to-int overflow on extremely high levels.
+        if ($time_seconds_float >= PHP_INT_MAX) {
+            return PHP_INT_MAX;
+        }
+
+        $time_seconds = (int)$time_seconds_float;
 
         // Minimum time is always 1 second for all objects/units.
         if ($time_seconds < 1) {
@@ -854,7 +861,14 @@ class PlanetService
                 );
         }
 
-        $time_seconds = (int)($time_hours * 3600);
+        $time_seconds_float = $time_hours * 3600;
+
+        // Clamp to PHP_INT_MAX to prevent float-to-int overflow on extremely high levels.
+        if ($time_seconds_float >= PHP_INT_MAX) {
+            return PHP_INT_MAX;
+        }
+
+        $time_seconds = (int)$time_seconds_float;
 
         // Minimum time is always 1 second for all objects/units.
         if ($time_seconds < 1) {
@@ -913,7 +927,14 @@ class PlanetService
                 (2500 * (1 + $shipyard_level) * $universe_speed * (2 ** $nanitefactory_level))
             );
 
-        $time_seconds = (int)($time_hours * 3600);
+        $time_seconds_float = $time_hours * 3600;
+
+        // Clamp to PHP_INT_MAX to prevent float-to-int overflow on extremely high levels.
+        if ($time_seconds_float >= PHP_INT_MAX) {
+            return PHP_INT_MAX;
+        }
+
+        $time_seconds = (int)$time_seconds_float;
 
         // Minimum time is always 1 second for all objects/units.
         if ($time_seconds < 1) {

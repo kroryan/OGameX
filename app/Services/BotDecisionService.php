@@ -458,15 +458,19 @@ class BotDecisionService
         // Get top 3 actions
         $topActions = array_slice($scoredActions, 0, 3, true);
 
-        // Calculate total score for weighted selection
-        $totalScore = array_sum($topActions);
+        // Use integer-based weighted random to avoid float precision issues.
+        // Multiply all scores by 100 and work with integers.
+        $intWeights = [];
+        foreach ($topActions as $action => $score) {
+            $intWeights[$action] = max(1, (int) round($score * 100));
+        }
 
-        // Weighted random selection
-        $rand = mt_rand(1, $totalScore * 100) / 100;
+        $totalWeight = array_sum($intWeights);
+        $rand = mt_rand(1, $totalWeight);
         $counter = 0;
 
-        foreach ($topActions as $action => $score) {
-            $counter += $score;
+        foreach ($intWeights as $action => $weight) {
+            $counter += $weight;
             if ($rand <= $counter) {
                 return BotActionType::from($action);
             }

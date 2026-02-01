@@ -68,6 +68,9 @@ return [
     'merchant_trade_amount_ratio' => 0.2,
     'merchant_trade_amount_max_ratio' => 0.5,
 
+    // Bot log retention (days). Set to 0 to disable pruning.
+    'bot_logs_retention_days' => env('BOTS_LOGS_RETENTION_DAYS', 14),
+
     // Metrics-driven tuning
     'bot_metrics_window_days' => 7,
     'bot_metrics_min_samples' => 20,

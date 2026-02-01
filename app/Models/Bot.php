@@ -171,6 +171,7 @@ class Bot extends Model
 
     /**
      * Get action probabilities for this bot.
+     * Merges: defaults < personality < admin config < adaptive overrides.
      */
     public function getActionProbabilities(): array
     {
@@ -189,11 +190,20 @@ class Bot extends Model
         };
 
         $base = $this->action_probabilities ?? $personalityWeights;
-        return array_merge($default, $base);
+        $result = array_merge($default, $base);
+
+        // Layer adaptive overrides from cache (does not modify DB settings).
+        $adaptive = \OGame\Services\AdaptiveStrategyService::getAdaptiveActionProbs($this->id);
+        if (!empty($adaptive)) {
+            $result = array_merge($result, $adaptive);
+        }
+
+        return $result;
     }
 
     /**
      * Get economy settings for this bot.
+     * Merges: defaults < admin config < adaptive overrides.
      */
     public function getEconomySettings(): array
     {
@@ -204,7 +214,15 @@ class Bot extends Model
             'prioritize_production' => 'balanced', // 'balanced', 'metal', 'crystal', 'deuterium'
         ];
 
-        return array_merge($default, $this->economy_settings ?? []);
+        $result = array_merge($default, $this->economy_settings ?? []);
+
+        // Layer adaptive overrides from cache (does not modify DB settings).
+        $adaptive = \OGame\Services\AdaptiveStrategyService::getAdaptiveEconomy($this->id);
+        if (!empty($adaptive)) {
+            $result = array_merge($result, $adaptive);
+        }
+
+        return $result;
     }
 
     /**

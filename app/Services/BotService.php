@@ -496,8 +496,8 @@ class BotService
 
             $service = app(CharacterClassService::class);
             $service->selectClass($user, $class);
-        } catch (Exception) {
-            // Ignore class selection errors
+        } catch (Exception $e) {
+            logger()->warning("Bot {$this->bot->id}: ensureCharacterClass failed: {$e->getMessage()}");
         }
     }
 
@@ -527,7 +527,8 @@ class BotService
             }
 
             return $count;
-        } catch (Exception) {
+        } catch (Exception $e) {
+            logger()->warning("Bot {$this->bot->id}: recallRiskyMissions failed: {$e->getMessage()}");
             return 0;
         }
     }
@@ -679,7 +680,8 @@ class BotService
             ]);
 
             return true;
-        } catch (Exception) {
+        } catch (Exception $e) {
+            logger()->warning("Bot {$this->bot->id}: performFleetSave failed: {$e->getMessage()}");
             return false;
         }
     }
@@ -737,7 +739,8 @@ class BotService
             ]);
 
             return true;
-        } catch (Exception) {
+        } catch (Exception $e) {
+            logger()->warning("Bot {$this->bot->id}: tryJumpGateEvacuation failed: {$e->getMessage()}");
             return false;
         }
     }
@@ -1001,6 +1004,10 @@ class BotService
 
                     // Skip very high levels
                     if ($currentLevel >= config('bots.max_building_level', 30)) {
+                        continue;
+                    }
+
+                    if (!ObjectService::objectRequirementsMet($building->machine_name, $planet)) {
                         continue;
                     }
 
@@ -1806,7 +1813,8 @@ class BotService
                 $this->bot->updateLastAction();
                 return true;
             }
-        } catch (Exception) {
+        } catch (Exception $e) {
+            logger()->warning("Bot {$this->bot->id}: tryMerchantTrade failed: {$e->getMessage()}");
             return false;
         }
 
@@ -2291,7 +2299,8 @@ class BotService
                     }
                 }
             }
-        } catch (Exception) {
+        } catch (Exception $e) {
+            logger()->warning("Bot {$this->bot->id}: shouldAbortAttackByPhalanx failed: {$e->getMessage()}");
             return false;
         }
 
@@ -2760,7 +2769,8 @@ class BotService
             ]);
 
             return true;
-        } catch (Exception) {
+        } catch (Exception $e) {
+            logger()->warning("Bot {$this->bot->id}: sendEspionageProbe failed: {$e->getMessage()}");
             return false;
         }
     }
@@ -2806,7 +2816,8 @@ class BotService
             ]);
 
             return true;
-        } catch (Exception) {
+        } catch (Exception $e) {
+            logger()->warning("Bot {$this->bot->id}: sendMissileAttack failed: {$e->getMessage()}");
             return false;
         }
     }
@@ -2837,7 +2848,7 @@ class BotService
             $maxMembers = (int) config('bots.alliance_max_members', 30);
             $openAlliance = Alliance::where('is_open', true)
                 ->withCount('members')
-                ->where('members_count', '<', $maxMembers)
+                ->having('members_count', '<', $maxMembers)
                 ->inRandomOrder()
                 ->first();
             $allianceService = app(\OGame\Services\AllianceService::class);
@@ -2866,8 +2877,8 @@ class BotService
             $alliance->application_text = 'Bots and players welcome.';
             $alliance->save();
             cache()->put($cacheKey, now()->timestamp, now()->addMinutes($cooldownMinutes));
-        } catch (Exception) {
-            // Ignore alliance errors
+        } catch (Exception $e) {
+            logger()->warning("Bot {$this->bot->id}: ensureAlliance failed: {$e->getMessage()}");
         }
     }
 
@@ -2884,8 +2895,8 @@ class BotService
             foreach ($applications as $application) {
                 $allianceService->acceptApplication($application->id, $userId);
             }
-        } catch (Exception) {
-            // Ignore alliance errors
+        } catch (Exception $e) {
+            logger()->warning("Bot {$this->bot->id}: processAllianceApplications failed: {$e->getMessage()}");
         }
     }
 
@@ -2989,8 +3000,8 @@ class BotService
                 ]);
                 break;
             }
-        } catch (Exception) {
-            // Ignore ACS errors
+        } catch (Exception $e) {
+            logger()->warning("Bot {$this->bot->id}: tryCreateAcsUnion failed: {$e->getMessage()}");
         }
     }
 
@@ -3012,7 +3023,7 @@ class BotService
     }
 
     /**
-     * Calculate fleet power for a planet (defenses).
+     * Calculate fleet power for a planet (ships + defenses).
      */
     private function calculateTargetFleetPower(PlanetService $planet): int
     {
@@ -3024,27 +3035,21 @@ class BotService
             $totalPower += $points * $unitObj->amount;
         }
 
-        // Add defense power
-        $defensePoints = 0;
-        $defenses = [
-            'rocket_launcher' => 2,
-            'light_laser' => 2,
-            'heavy_laser' => 4,
-            'gauss_cannon' => 10,
-            'ion_cannon' => 10,
-            'plasma_turret' => 15,
-            'small_shield_dome' => 2,
-            'large_shield_dome' => 6,
+        // Add defense power using the same getUnitPoints() values for consistency.
+        $defenseNames = [
+            'rocket_launcher', 'light_laser', 'heavy_laser',
+            'gauss_cannon', 'ion_cannon', 'plasma_turret',
+            'small_shield_dome', 'large_shield_dome',
         ];
 
-        foreach ($defenses as $defense => $points) {
-            $level = $planet->getObjectLevel($defense);
-            if ($level > 0) {
-                $defensePoints += $points * $level;
+        foreach ($defenseNames as $defense) {
+            $amount = $planet->getObjectLevel($defense);
+            if ($amount > 0) {
+                $totalPower += $this->getUnitPoints($defense) * $amount;
             }
         }
 
-        return $totalPower + $defensePoints;
+        return $totalPower;
     }
 
     /**
@@ -3068,11 +3073,12 @@ class BotService
     }
 
     /**
-     * Get unit points for fleet power calculation.
+     * Get unit combat power points for fleet/defense power calculation.
      */
     private function getUnitPoints(string $machineName): int
     {
         $points = [
+            // Ships
             'light_fighter' => 3,
             'heavy_fighter' => 6,
             'cruiser' => 10,
@@ -3088,6 +3094,15 @@ class BotService
             'espionage_probe' => 1,
             'solar_satellite' => 1,
             'crawler' => 5,
+            // Defense
+            'rocket_launcher' => 2,
+            'light_laser' => 2,
+            'heavy_laser' => 4,
+            'gauss_cannon' => 10,
+            'ion_cannon' => 8,
+            'plasma_turret' => 30,
+            'small_shield_dome' => 5,
+            'large_shield_dome' => 20,
         ];
 
         return $points[$machineName] ?? 1;

@@ -133,11 +133,13 @@ class BotFleetBuilderService
     }
 
     /**
-     * Calculate fleet composition for expedition based on personality.
+     * Calculate fleet composition for expedition based on personality and budget.
+     * $maxPoints scales the composition so smaller fleets send fewer units.
      */
     private function calculateExpeditionComposition(BotPersonality $personality, int $maxPoints): array
     {
-        return match ($personality) {
+        // Base composition at maxPoints=5000 (the default scale).
+        $baseComposition = match ($personality) {
             BotPersonality::AGGRESSIVE => [
                 'battlecruiser' => 5,
                 'battle_ship' => 10,
@@ -162,5 +164,15 @@ class BotFleetBuilderService
                 'light_fighter' => 40,
             ],
         };
+
+        // Scale composition based on maxPoints (base designed for ~5000 points).
+        $scale = max(0.1, $maxPoints / 5000);
+        $scaled = [];
+        foreach ($baseComposition as $unit => $amount) {
+            $scaledAmount = max(1, (int) round($amount * $scale));
+            $scaled[$unit] = $scaledAmount;
+        }
+
+        return $scaled;
     }
 }

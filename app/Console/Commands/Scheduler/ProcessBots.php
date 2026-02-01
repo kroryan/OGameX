@@ -7,6 +7,7 @@ use OGame\Enums\BotActionType;
 use OGame\Models\Bot;
 use OGame\Services\BotDecisionService;
 use OGame\Services\BotService;
+use OGame\Services\GameStateAnalyzer;
 
 /**
  * ProcessBots - Scheduler command that processes active playerbots.
@@ -82,6 +83,8 @@ class ProcessBots extends Command
 
         foreach ($bots as $botService) {
             try {
+                // Clear per-tick state cache before each bot to avoid stale data.
+                GameStateAnalyzer::clearCache();
                 $this->processBot($botService);
                 $successCount++;
             } catch (\Exception $e) {

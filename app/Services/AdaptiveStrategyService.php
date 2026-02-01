@@ -7,6 +7,11 @@ use OGame\Enums\BotActionType;
 
 /**
  * AdaptiveStrategyService - Adjust bot behavior based on metrics.
+ *
+ * Overrides are stored in cache rather than overwriting the bot's DB settings,
+ * so admin-configured values are preserved. The Bot model's getActionProbabilities()
+ * and getEconomySettings() remain the admin baseline; adaptive adjustments are
+ * layered on top via cache and applied by BotDecisionService scoring.
  */
 class AdaptiveStrategyService
 {
@@ -29,13 +34,14 @@ class AdaptiveStrategyService
         $growth = $this->metrics->getGrowthRate($state, $botId);
         $efficiency = $this->metrics->getResourceEfficiency($state, $botId);
 
+        // Start from the admin-configured base values (not previously adapted values).
         $economy = $bot->economy_settings ?? [];
         $actionProbs = $bot->action_probabilities ?? [];
 
-        $changed = false;
-
         $longTerm = app(\OGame\Services\BotLongTermStrategyService::class)->getStrategy($botService, $state);
         $economy = array_merge($economy, $longTerm['economy'] ?? []);
+
+        $changed = false;
 
         if ($growth < 5 && $efficiency < 0.6) {
             // Stagnation: spend more and build more.
@@ -70,9 +76,9 @@ class AdaptiveStrategyService
         }
 
         if ($changed) {
-            $bot->economy_settings = $economy;
-            $bot->action_probabilities = $actionProbs;
-            $bot->save();
+            // Store overrides in cache instead of overwriting DB settings.
+            Cache::put("bot:{$botId}:adaptive_economy", $economy, now()->addMinutes(60));
+            Cache::put("bot:{$botId}:adaptive_action_probs", $actionProbs, now()->addMinutes(60));
 
             $botService->logAction(
                 BotActionType::BUILD,
@@ -82,5 +88,21 @@ class AdaptiveStrategyService
         }
 
         Cache::put($cooldownKey, true, now()->addMinutes(30));
+    }
+
+    /**
+     * Get the adaptive economy overrides for a bot (or empty array if none).
+     */
+    public static function getAdaptiveEconomy(int $botId): array
+    {
+        return Cache::get("bot:{$botId}:adaptive_economy", []);
+    }
+
+    /**
+     * Get the adaptive action probability overrides for a bot (or empty array if none).
+     */
+    public static function getAdaptiveActionProbs(int $botId): array
+    {
+        return Cache::get("bot:{$botId}:adaptive_action_probs", []);
     }
 }

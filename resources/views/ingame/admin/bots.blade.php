@@ -193,6 +193,7 @@
                     <div class="action-buttons-container">
                         <a href="{{ route('admin.bots.create') }}" class="btn_blue">Create New Bot</a>
                         <a href="{{ route('admin.bots.stats') }}" class="btn_blue">View Statistics</a>
+                        <a href="{{ route('bots.progress.index') }}" class="btn_blue">Progress Charts</a>
                         <a href="{{ route('admin.bots.logs-all') }}" class="btn_blue">View All Logs</a>
                     </div>
 

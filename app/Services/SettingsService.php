@@ -692,4 +692,14 @@ class SettingsService
     {
         return (bool)$this->get('highscore_admin_visible', 0);
     }
+
+    /**
+     * Returns whether bot/player progress charts are visible to all players.
+     *
+     * @return bool
+     */
+    public function botProgressPublicVisible(): bool
+    {
+        return (bool)$this->get('bot_progress_public_visible', 0);
+    }
 }

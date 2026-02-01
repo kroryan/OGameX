@@ -8,6 +8,7 @@ use OGame\Console\Commands\Scheduler\GenerateHighscores;
 use OGame\Console\Commands\Scheduler\ProcessBots;
 use OGame\Console\Commands\Scheduler\PruneBotLogs;
 use OGame\Console\Commands\Scheduler\ResetDebrisFields;
+use OGame\Console\Commands\Scheduler\SnapshotPlayerProgress;
 
 /*
 |--------------------------------------------------------------------------
@@ -25,6 +26,8 @@ Schedule::command(GenerateHighscores::class)->everyFiveMinutes();
 Schedule::command(GenerateAllianceHighscores::class)->everyFiveMinutes();
 // Generates ranks for both player and alliance highscores
 Schedule::command(GenerateHighscoreRanks::class)->everyFiveMinutes();
+// Snapshot player progress for charts every 30 minutes
+Schedule::command(SnapshotPlayerProgress::class)->everyThirtyMinutes()->withoutOverlapping();
 
 // Reset empty debris fields weekly on Monday at 1:00 AM
 Schedule::command(ResetDebrisFields::class)->weeklyOn(1, '1:00');

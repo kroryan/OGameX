@@ -71,6 +71,7 @@ class ServerSettingsController extends OGameController
             'expedition_weight_items' => $settingsService->expeditionWeightItems(),
             'hamill_probability' => $settingsService->hamillManoeuvreChance(),
             'highscore_admin_visible' => $settingsService->highscoreAdminVisible(),
+            'bot_progress_public_visible' => $settingsService->botProgressPublicVisible(),
         ]);
     }
 
@@ -139,6 +140,7 @@ class ServerSettingsController extends OGameController
         $settingsService->set('hamill_manoeuvre_chance', max(1, (int)request('hamill_probability', 1000)));
 
         $settingsService->set('highscore_admin_visible', request('highscore_admin_visible', 0));
+        $settingsService->set('bot_progress_public_visible', request('bot_progress_public_visible', 0));
 
         // Clear highscore cache when admin visibility setting changes
         $this->clearHighscoreCache();

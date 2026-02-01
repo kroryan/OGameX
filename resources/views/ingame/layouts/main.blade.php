@@ -695,6 +695,21 @@ Combat simulation save slots +20">
                         </a>
                     </li>
 
+                    @if ($currentPlayer->isAdmin() || $settings->botProgressPublicVisible())
+                        <li>
+                            <span class="menu_icon">
+                                <div class="menuImage overview {{(Request::is('bots/progress*') ? 'highlighted' : '') }}"></div>
+                            </span>
+                            <a class="menubutton {{(Request::is('bots/progress*') ? 'selected' : '') }}"
+                               href="{{ route('bots.progress.index') }}"
+                               accesskey=""
+                               target="_self"
+                            >
+                                <span class="textlabel">@lang('Progress')</span>
+                            </a>
+                        </li>
+                    @endif
+
                     <li>
                         <span class="menu_icon">
                             <div class="menuImage premium {{(Request::is('premium') ? 'highlighted' : '') }}"></div>

@@ -428,6 +428,16 @@
                                 </div>
                                 <div class="smallFont">@lang('When enabled, admin users appear in highscores with orange-highlighted names. When disabled (default), admins are excluded from rankings entirely.')</div>
                             </div>
+                            <div class="fieldwrapper">
+                                <label class="styled textBeefy">@lang('Show bot progress charts to all players:')</label>
+                                <div class="thefield">
+                                    <square-checkbox class="square-checkbox">
+                                        <input type="checkbox" id="square-checkBotProgressPublicVisible" name="bot_progress_public_visible" value="1" {{ $bot_progress_public_visible ? 'checked' : '' }}>
+                                        <label for="square-checkBotProgressPublicVisible"></label>
+                                    </square-checkbox>
+                                </div>
+                                <div class="smallFont">@lang('When enabled, all players can access the bots vs players progress charts.')</div>
+                            </div>
                         </div>
 
                         <p class="box_highlight textCenter no_buddies">@lang('Galaxy settings.')</p>

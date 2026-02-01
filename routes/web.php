@@ -22,6 +22,7 @@ use OGame\Http\Controllers\MessagesController;
 use OGame\Http\Controllers\NotesController;
 use OGame\Http\Controllers\OptionsController;
 use OGame\Http\Controllers\BotController;
+use OGame\Http\Controllers\BotProgressController;
 use OGame\Http\Controllers\OverviewController;
 use OGame\Http\Controllers\PaymentController;
 use OGame\Http\Controllers\PhalanxController;
@@ -188,6 +189,8 @@ Route::middleware(['auth', 'globalgame', 'locale', 'firstlogin'])->group(functio
     Route::get('/options', [OptionsController::class, 'index'])->name('options.index');
     Route::post('/options', [OptionsController::class, 'save'])->name('options.save');
     Route::get('/bot/logs', [BotController::class, 'logs'])->name('bot.logs');
+    Route::get('/bots/progress', [BotProgressController::class, 'index'])->name('bots.progress.index');
+    Route::get('/bots/progress/data', [BotProgressController::class, 'data'])->name('bots.progress.data');
 
     Route::get('/highscore', [HighscoreController::class, 'index'])->name('highscore.index');
     Route::post('/ajax/highscore', [HighscoreController::class, 'ajax'])->name('highscore.ajax');

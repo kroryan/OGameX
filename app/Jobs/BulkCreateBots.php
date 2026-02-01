@@ -14,6 +14,8 @@ use OGame\Enums\BotPersonality;
 use OGame\Enums\BotTargetType;
 use OGame\Models\Bot;
 use OGame\Models\User;
+use OGame\Services\ObjectService;
+use OGame\Services\PlayerService;
 
 class BulkCreateBots implements ShouldQueue
 {
@@ -88,11 +90,97 @@ class BulkCreateBots implements ShouldQueue
                         'max_fleets_sent' => (int) ($this->payload['max_fleets_sent'] ?? 3),
                         'is_active' => (bool) ($this->payload['is_active'] ?? true),
                     ]);
+
+                    // Seed initial buildings, research, units, and resources
+                    $this->seedBotPlanet($user);
                 });
             } catch (\Exception $e) {
                 // Skip failed entries and continue.
                 continue;
             }
+        }
+    }
+
+    /**
+     * Seed the bot's starting planet with initial buildings, research, units, and resources.
+     */
+    private function seedBotPlanet(User $user): void
+    {
+        $seed = config('bots.initial_seed', []);
+        if (empty($seed)) {
+            return;
+        }
+
+        try {
+            $playerServiceFactory = app(\OGame\Factories\PlayerServiceFactory::class);
+            $player = $playerServiceFactory->make($user->id);
+            $planets = $player->planets->all();
+
+            if (empty($planets)) {
+                return;
+            }
+
+            $planet = reset($planets);
+
+            // Set initial building levels
+            $buildings = $seed['buildings'] ?? [];
+            foreach ($buildings as $machineName => $level) {
+                try {
+                    $object = ObjectService::getObjectByMachineName($machineName);
+                    $currentLevel = $planet->getObjectLevel($machineName);
+                    if ($currentLevel < $level) {
+                        $planet->setObjectLevel($object->id, $level, false);
+                    }
+                } catch (\Exception $e) {
+                    continue;
+                }
+            }
+            $planet->save();
+
+            // Set initial research levels
+            $research = $seed['research'] ?? [];
+            foreach ($research as $machineName => $level) {
+                try {
+                    $currentLevel = $player->getResearchLevel($machineName);
+                    if ($currentLevel < $level) {
+                        $player->setResearchLevel($machineName, $level);
+                    }
+                } catch (\Exception $e) {
+                    continue;
+                }
+            }
+
+            // Add initial units
+            $units = $seed['units'] ?? [];
+            foreach ($units as $machineName => $amount) {
+                try {
+                    $current = $planet->getObjectAmount($machineName);
+                    if ($current < $amount) {
+                        $planet->addUnit($machineName, $amount - $current, false);
+                    }
+                } catch (\Exception $e) {
+                    continue;
+                }
+            }
+            $planet->save();
+
+            // Add bonus starting resources
+            $resources = $seed['resources'] ?? [];
+            if (!empty($resources)) {
+                try {
+                    $bonus = new \OGame\Models\Resources(
+                        $resources['metal'] ?? 0,
+                        $resources['crystal'] ?? 0,
+                        $resources['deuterium'] ?? 0,
+                        0
+                    );
+                    $planet->addResources($bonus);
+                } catch (\Exception $e) {
+                    // Non-critical
+                }
+            }
+        } catch (\Exception $e) {
+            logger()->warning("BulkCreateBots: Failed to seed bot planet for user {$user->id}: {$e->getMessage()}");
         }
     }
 

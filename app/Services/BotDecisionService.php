@@ -488,13 +488,13 @@ class BotDecisionService
     {
         $modifiers = [
             'early' => [
-                BotActionType::BUILD->value => 1.5,
-                BotActionType::RESEARCH->value => 1.3,
-                BotActionType::FLEET->value => 0.5,
-                BotActionType::ATTACK->value => 0.2,
+                BotActionType::BUILD->value => 1.4,
+                BotActionType::RESEARCH->value => 1.5,
+                BotActionType::FLEET->value => 0.9,
+                BotActionType::ATTACK->value => 0.5,
                 BotActionType::TRADE->value => 0.6,
-                BotActionType::ESPIONAGE->value => 0.3,
-                BotActionType::DEFENSE->value => 0.4,
+                BotActionType::ESPIONAGE->value => 0.6,
+                BotActionType::DEFENSE->value => 0.6,
                 BotActionType::DIPLOMACY->value => 0.5,
             ],
             'mid' => [
@@ -574,7 +574,9 @@ class BotDecisionService
 
             case 'research':
                 if (($state['research_points'] ?? 0) < ($state['building_points'] ?? 0) * 0.5) {
-                    $modifier = 1.4;
+                    $modifier = 1.6;
+                } elseif (($state['research_points'] ?? 0) < ($state['building_points'] ?? 0) * 0.3) {
+                    $modifier = 2.0;
                 }
                 if (!empty($state['is_under_threat'])) {
                     $modifier *= 0.8;
@@ -639,7 +641,10 @@ class BotDecisionService
                 break;
             case BotActionType::FLEET:
                 if (($state['fleet_points'] ?? 0) < ($state['building_points'] ?? 0) * 0.3) {
-                    $bonus += 10;
+                    $bonus += 20;
+                }
+                if (($state['fleet_points'] ?? 0) < 100) {
+                    $bonus += 15; // Urgently need some fleet
                 }
                 break;
             case BotActionType::ATTACK:
@@ -748,8 +753,15 @@ class BotDecisionService
     private function selectBestAction(array $scoredActions): BotActionType
     {
         arsort($scoredActions);
-        $topActions = array_slice($scoredActions, 0, 3, true);
+        $topActions = array_slice($scoredActions, 0, 2, true);
 
+        // 75% chance to pick the best action, 25% for the second-best
+        $keys = array_keys($topActions);
+        if (count($keys) >= 2 && mt_rand(1, 100) <= 75) {
+            return BotActionType::from($keys[0]);
+        }
+
+        // Weighted random from top 2
         $intWeights = [];
         foreach ($topActions as $action => $score) {
             $intWeights[$action] = max(1, (int) round($score * 100));

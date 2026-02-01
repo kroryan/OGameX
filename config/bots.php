@@ -19,8 +19,8 @@ return [
     // Number of bots to process per scheduler run (prevents long locks)
     'scheduler_batch_size' => env('BOTS_SCHEDULER_BATCH_SIZE', 200),
 
-    // Default cooldown (in hours) after a bot attacks before it can attack again
-    'default_attack_cooldown_hours' => 1,
+    // Default cooldown (in minutes) after a bot attacks before it can attack again
+    'default_attack_cooldown_minutes' => 30,
 
     // Maximum number of fleets a bot can have active at once
     'max_fleets_per_bot' => 3,
@@ -43,7 +43,7 @@ return [
 
     // Maximum level a bot will build buildings/research to
     'max_building_level' => 30,
-    'max_research_level' => 20,
+    'max_research_level' => 18,
 
     // Default activity cycle when no schedule is defined
     // Bots are active continuously by default (window >= cycle disables cycling).
@@ -53,14 +53,14 @@ return [
     // Strategic thresholds and tuning
     'espionage_report_max_age_minutes' => 20,
     'target_intel_max_age_minutes' => 30,
-    'attack_min_loot_ratio_capacity' => 0.2,
+    'attack_min_loot_ratio_capacity' => 0.10,
     'attack_expected_loss_cost_multiplier' => 1000,
-    'attack_expected_loss_min_profit_ratio' => 0.3,
-    'attack_min_profit_consumption_multiplier' => 1.0,
+    'attack_expected_loss_min_profit_ratio' => 0.15,
+    'attack_min_profit_consumption_multiplier' => 0.5,
     'attack_phalanx_scan_enabled' => true,
     'attack_phalanx_scan_chance' => 0.35,
     'attack_phalanx_abort_window_seconds' => 300,
-    'avoid_stronger_player_ratio' => 1.2,
+    'avoid_stronger_player_ratio' => 1.8,
 
     // Merchant trade tuning
     'merchant_trade_min_imbalance' => 0.35,
@@ -77,9 +77,9 @@ return [
 
     // Dynamic fleet threshold for "significant fleet" by game phase
     'significant_fleet_threshold' => [
-        'early' => 5000,
-        'mid' => 30000,
-        'late' => 80000,
+        'early' => 500,
+        'mid' => 15000,
+        'late' => 50000,
     ],
 
     // Build defenses on all planets, not just richest
@@ -126,4 +126,43 @@ return [
         'economic' => [50, 15, 5, 30],
         'balanced' => [30, 25, 20, 25],
     ],
+
+    // Maximum actions a bot can take per tick
+    'max_actions_per_tick' => 3,
+
+    // Initial building/research seed for new bots (jumpstart progression)
+    'initial_seed' => [
+        'buildings' => [
+            'metal_mine' => 4,
+            'crystal_mine' => 3,
+            'deuterium_synthesizer' => 1,
+            'solar_plant' => 4,
+            'robot_factory' => 2,
+            'shipyard' => 1,
+            'research_lab' => 1,
+            'metal_store' => 2,
+            'crystal_store' => 2,
+            'deuterium_store' => 1,
+        ],
+        'research' => [
+            'energy_technology' => 1,
+            'espionage_technology' => 2,
+            'computer_technology' => 1,
+            'combustion_drive' => 1,
+        ],
+        'units' => [
+            'espionage_probe' => 5,
+            'small_cargo' => 3,
+            'light_fighter' => 10,
+            'rocket_launcher' => 5,
+        ],
+        'resources' => [
+            'metal' => 5000,
+            'crystal' => 3000,
+            'deuterium' => 1000,
+        ],
+    ],
+
+    // Minimum fleet points to consider an attack (lower = more aggressive early)
+    'min_fleet_size_for_attack' => 50,
 ];

@@ -10,8 +10,8 @@ class GameStateAnalyzer
     /**
      * Game phases based on player points.
      */
-    private const EARLY_GAME_THRESHOLD = 100000;
-    private const MID_GAME_THRESHOLD = 1000000;
+    private const EARLY_GAME_THRESHOLD = 50000;
+    private const MID_GAME_THRESHOLD = 500000;
 
     /**
      * In-memory cache of state per bot id within the same request/tick.

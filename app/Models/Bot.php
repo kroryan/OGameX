@@ -242,7 +242,7 @@ class Bot extends Model
         $default = [
             'attack_fleet_percentage' => 0.7, // Percentage of fleet to send in attacks
             'expedition_fleet_percentage' => 0.3, // Percentage of fleet to send on expeditions
-            'min_fleet_size_for_attack' => 100, // Minimum fleet points to attack
+            'min_fleet_size_for_attack' => (int) config('bots.min_fleet_size_for_attack', 50), // Minimum fleet points to attack
             'prefer_fast_ships' => false, // Prefer faster ships over powerful ones
             'always_include_recyclers' => true, // Always include recyclers in attacks
             'max_expedition_fleet_cost_percentage' => 0.2, // Max 20% of fleet value for expeditions
@@ -252,11 +252,11 @@ class Bot extends Model
     }
 
     /**
-     * Set attack cooldown for the specified number of hours.
+     * Set attack cooldown for the specified number of minutes.
      */
-    public function setAttackCooldown(int $hours): void
+    public function setAttackCooldown(int $minutes): void
     {
-        $this->attack_cooldown_until = now()->addHours($hours);
+        $this->attack_cooldown_until = now()->addMinutes($minutes);
         $this->save();
     }
 

@@ -411,15 +411,18 @@ class BotService
         $maxStorageBeforeSpending = (float) ($economy['max_storage_before_spending'] ?? 0.7);
         $usagePercent = $this->getStorageUsagePercent($planet);
         if ($total < 10000) {
-            // Early game: spend aggressively to avoid stalling.
-            $reserve = min($reserve, 0.15);
+            // Early game: spend almost everything to avoid stalling.
+            $reserve = min($reserve, 0.05);
             $roles = $this->getPlanetRoles();
             if (($roles[$planet->getPlanetId()] ?? null) === 'colony') {
-                $reserve = min($reserve, 0.05);
+                $reserve = 0.0;
             }
         } elseif ($total < 50000) {
-            // Mid-early: moderate reserve
-            $reserve = min($reserve, 0.25);
+            // Mid-early: low reserve to keep growing
+            $reserve = min($reserve, 0.10);
+        } elseif ($total < 100000) {
+            // Mid game: moderate reserve
+            $reserve = min($reserve, 0.20);
         } elseif ($usagePercent >= $maxStorageBeforeSpending) {
             // Storage pressured: spend more to avoid waste
             $reserve = min($reserve, 0.15);
@@ -1103,9 +1106,9 @@ class BotService
             // Sort by score (highest priority/lowest cost)
             usort($affordableBuildings, fn($a, $b) => $b['score'] <=> $a['score']);
 
-            // Pick from top 3 buildings (some randomness)
-            $topBuildings = array_slice($affordableBuildings, 0, min(3, count($affordableBuildings)));
-            $choice = $topBuildings[array_rand($topBuildings)];
+            // Pick best building (80% best, 20% second-best for variety)
+            $topBuildings = array_slice($affordableBuildings, 0, min(2, count($affordableBuildings)));
+            $choice = (count($topBuildings) >= 2 && mt_rand(1, 100) <= 20) ? $topBuildings[1] : $topBuildings[0];
             $building = $choice['building'];
             $planet = $choice['planet'];
 
@@ -1450,9 +1453,10 @@ class BotService
                 return false;
             }
 
-            // Sort by score and pick from top options
+            // Sort by score and pick best option (80% best, 20% second-best)
             usort($affordableUnits, fn($a, $b) => $b['score'] <=> $a['score']);
-            $selected = $affordableUnits[array_rand(array_slice($affordableUnits, 0, min(5, count($affordableUnits))))];
+            $topUnits = array_slice($affordableUnits, 0, min(3, count($affordableUnits)));
+            $selected = (count($topUnits) >= 2 && mt_rand(1, 100) <= 20) ? $topUnits[1] : $topUnits[0];
 
             $unit = $selected['unit'];
             $maxAmount = $selected['amount'];
@@ -2157,9 +2161,10 @@ class BotService
             // Sort by score
             usort($affordableResearch, fn($a, $b) => $b['score'] <=> $a['score']);
 
-            // Pick from top 3 with slight randomness
-            $topResearch = array_slice($affordableResearch, 0, min(3, count($affordableResearch)));
-            $tech = $topResearch[array_rand($topResearch)]['tech'];
+            // Pick best research (80% best, 20% second-best for variety)
+            $topResearch = array_slice($affordableResearch, 0, min(2, count($affordableResearch)));
+            $chosen = (count($topResearch) >= 2 && mt_rand(1, 100) <= 20) ? $topResearch[1] : $topResearch[0];
+            $tech = $chosen['tech'];
 
             // Research it
             $queueService = app(ResearchQueueService::class);
@@ -2633,8 +2638,8 @@ class BotService
                 ], now()->addHours(2));
             }
 
-            // Set cooldown
-            $cooldown = config('bots.default_attack_cooldown_hours', 1);
+            // Set cooldown (in minutes)
+            $cooldown = (int) config('bots.default_attack_cooldown_minutes', 30);
             $this->bot->setAttackCooldown($cooldown);
             $this->bot->updateLastAction();
 

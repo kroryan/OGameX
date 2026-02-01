@@ -328,8 +328,12 @@ class DeveloperShortcutsController extends OGameController
                     }
                 }
 
-                // Reset resources to starting values
-                $planet->setResources(new Resources(
+                // Reset resources to starting values (500 metal, 500 crystal, 0 deuterium)
+                // First deduct all current resources to set to 0
+                $currentResources = $planet->getResources();
+                $planet->deductResources($currentResources);
+                // Then add starting resources
+                $planet->addResources(new Resources(
                     metal: 500,
                     crystal: 500,
                     deuterium: 0,
@@ -343,6 +347,7 @@ class DeveloperShortcutsController extends OGameController
             // Set first planet as current if not set
             if (empty($user->planet_current) && count($planets) > 0) {
                 $user->planet_current = $planets[0]->getPlanetId();
+                $user->save();
             }
 
             // Reset all research to level 0

@@ -46,7 +46,7 @@ class BulkCreateBots implements ShouldQueue
 
         $defaultPassword = (string) ($this->payload['password'] ?? '');
         if ($defaultPassword === '') {
-            $defaultPassword = 'botpassword123';
+            $defaultPassword = 'BotPassword123!';
         }
 
         $creator = app(CreatesNewUsers::class);
@@ -56,17 +56,21 @@ class BulkCreateBots implements ShouldQueue
             $prefix = 'Bot';
         }
         $nameOffset = Bot::where('name', 'like', $prefix . ' %')->count();
+        $created = 0;
+        $attempts = 0;
+        $maxAttempts = max($count * 5, $count + 10);
 
-        for ($i = 1; $i <= $count; $i++) {
+        while ($created < $count && $attempts < $maxAttempts) {
+            $attempts++;
             $email = $this->generateUniqueBotEmail(
                 (string) ($this->payload['email_prefix'] ?? 'bot'),
                 (string) ($this->payload['email_domain'] ?? 'bots.local'),
                 $batchToken,
-                $i
+                $attempts
             );
 
             try {
-                DB::transaction(function () use ($creator, $email, $i, $defaultPassword, $prefix, $nameOffset) {
+                DB::transaction(function () use ($creator, $email, $defaultPassword, $prefix, $nameOffset, &$created) {
                     $user = $creator->create([
                         'email' => $email,
                         'password' => $defaultPassword,
@@ -80,7 +84,7 @@ class BulkCreateBots implements ShouldQueue
                         ? BotTargetType::cases()[array_rand(BotTargetType::cases())]->value
                         : (string) $this->payload['priority_target_type'];
 
-                    $botName = sprintf('%s %03d', $prefix, $nameOffset + $i);
+                    $botName = sprintf('%s %03d', $prefix, $nameOffset + $created + 1);
 
                     Bot::create([
                         'user_id' => $user->id,
@@ -93,11 +97,16 @@ class BulkCreateBots implements ShouldQueue
 
                     // Seed initial buildings, research, units, and resources
                     $this->seedBotPlanet($user);
+
+                    $created++;
                 });
             } catch (\Exception $e) {
-                // Skip failed entries and continue.
-                continue;
+                logger()->warning("BulkCreateBots: Failed to create bot {$attempts}/{$count}: {$e->getMessage()}");
             }
+        }
+
+        if ($created < $count) {
+            logger()->warning("BulkCreateBots: Created {$created} of {$count} requested bots (attempts: {$attempts}).");
         }
     }
 

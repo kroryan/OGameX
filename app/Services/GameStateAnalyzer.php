@@ -126,6 +126,29 @@ class GameStateAnalyzer
         $fleetSlotsUsed = $player->getFleetSlotsInUse();
         $fleetSlotUsage = $fleetSlotsMax > 0 ? $fleetSlotsUsed / $fleetSlotsMax : 0.0;
 
+        // Per-planet situation awareness for individualized decisions
+        $planetSituations = [];
+        $minHoursUntilStorageFull = PHP_FLOAT_MAX;
+        $hasEnergyCrisis = false;
+        foreach ($planets as $planet) {
+            $hoursUntilFull = $botService->getHoursUntilStorageFull($planet);
+            $minHoursUntilStorageFull = min($minHoursUntilStorageFull, $hoursUntilFull);
+            $energyBalance = 0;
+            try { $energyBalance = $planet->energy()->get(); } catch (\Exception) {}
+            if ($energyBalance < 0) {
+                $hasEnergyCrisis = true;
+            }
+            $fieldsRemaining = 0;
+            try { $fieldsRemaining = $planet->getPlanetFieldMax() - $planet->getBuildingCount(); } catch (\Exception) {}
+
+            $planetSituations[$planet->getPlanetId()] = [
+                'hours_until_storage_full' => $hoursUntilFull,
+                'energy_balance' => $energyBalance,
+                'storage_usage' => $botService->getStorageUsagePercent($planet),
+                'fields_remaining' => $fieldsRemaining,
+            ];
+        }
+
         return [
             'total_points' => $totalPoints,
             'building_points' => $buildingPoints,
@@ -159,6 +182,10 @@ class GameStateAnalyzer
             'all_research_queues_full' => $planetsWithResearchQueueSpace === 0,
             'total_building_queue_usage' => $totalBuildingQueueSlots,
             'total_research_queue_usage' => $totalResearchQueueSlots,
+            // Per-planet situation data
+            'planet_situations' => $planetSituations,
+            'min_hours_until_storage_full' => $minHoursUntilStorageFull < PHP_FLOAT_MAX ? $minHoursUntilStorageFull : 999,
+            'has_energy_crisis' => $hasEnergyCrisis,
         ];
     }
 

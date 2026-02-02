@@ -34,12 +34,14 @@ return [
 
     // Allow bots to join/create alliances
     'allow_alliances' => true,
-    'alliance_apply_chance' => 0.05, // 5% per bot tick to apply/join
-    'alliance_create_chance' => 0.02, // 2% per bot tick to create if none available
-    'alliance_max_created' => 50, // Cap total bot-created alliances
+    'alliance_apply_chance' => 0.15, // 15% per bot tick to apply/join
+    'alliance_create_chance' => 0.08, // 8% per bot tick to create if none available
+    'alliance_max_created' => 10, // Cap total bot-created alliances
     'alliance_max_members' => 30, // Soft cap per alliance for bot logic
-    'alliance_action_cooldown_minutes' => 360,
+    'alliance_action_cooldown_minutes' => 120,
     'alliance_auto_accept' => true,
+    'alliance_invite_human_chance' => 0.10, // 10% chance per tick for bots to invite nearby humans
+    'alliance_diplomat_bonus_chance' => 0.20, // Extra invite chance for DIPLOMAT personality
 
     // Maximum level a bot will build buildings/research to
     'max_building_level' => 30,
@@ -165,4 +167,20 @@ return [
 
     // Minimum fleet points to consider an attack (lower = more aggressive early)
     'min_fleet_size_for_attack' => 50,
+
+    // Colonization tuning
+    'colonization_aggressive_min_fleet' => 5000, // Min fleet points for aggressive/raider to colonize (was 80000)
+    'colonization_turtle_min_defense' => 500, // Min defense points for turtle to colonize (was 5000)
+    'colonization_cross_galaxy' => true, // Allow cross-galaxy colonization when same galaxy full
+    'colonization_max_attempts' => 60, // Max attempts to find empty position
+    'colonization_cargo_metal_ratio' => 0.50, // Cargo split for new colonies
+    'colonization_cargo_crystal_ratio' => 0.30,
+    'colonization_cargo_deut_ratio' => 0.20,
+
+    // ROI optimization
+    'roi_score_cap' => 80, // Max ROI bonus for building priority (was 40)
+    'storage_forecast_hours_threshold' => 4, // Build storage when this many hours from full
+    'energy_deficit_emergency_bonus' => 100, // Priority bonus for energy buildings when deficit (was 45)
+    'storage_aggressive_spend_threshold' => 0.80, // At this storage %, drop reserves near 0
+    'production_imbalance_threshold' => 0.40, // Deprioritize overproducing mine if imbalance > this
 ];

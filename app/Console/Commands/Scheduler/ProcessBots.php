@@ -571,7 +571,7 @@ class ProcessBots extends Command
             $botModel = $bot->getBot();
             $user = $bot->getPlayer()->getUser();
 
-            // Sync alliance allies to threat map
+            // Sync alliance allies to threat map and invite humans
             if ($user->alliance_id) {
                 $intel = new BotIntelligenceService();
                 $intel->syncAllianceAllies($botModel->id, $user->alliance_id);
@@ -579,7 +579,7 @@ class ProcessBots extends Command
                 return true;
             }
 
-            // If not in alliance, try to join one
+            // If not in alliance, try to join or create one
             $bot->ensureAlliance();
             return true;
         } catch (\Exception $e) {

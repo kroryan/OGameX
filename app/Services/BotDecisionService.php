@@ -633,6 +633,17 @@ class BotDecisionService
                 if (!empty($state['is_storage_pressure_high'])) {
                     $bonus += 10;
                 }
+                // Storage forecast urgency: force building when storage is about to overflow
+                $hoursLeft = $state['min_hours_until_storage_full'] ?? 999;
+                if ($hoursLeft < 2) {
+                    $bonus += 30; // Urgent: must build or spend
+                } elseif ($hoursLeft < 4) {
+                    $bonus += 15;
+                }
+                // Energy crisis: prioritize building to fix energy deficit
+                if (!empty($state['has_energy_crisis'])) {
+                    $bonus += 25;
+                }
                 break;
             case BotActionType::RESEARCH:
                 if (($state['research_points'] ?? 0) < ($state['building_points'] ?? 0) * 0.6) {
@@ -655,6 +666,10 @@ class BotDecisionService
             case BotActionType::TRADE:
                 $imbalance = (float) ($state['resource_imbalance'] ?? 0.0);
                 $bonus += min(20, $imbalance * 30);
+                // Trade is valuable when storage is almost full (convert excess resources)
+                if (($state['storage_usage_max'] ?? 0) > 0.85) {
+                    $bonus += 15;
+                }
                 break;
             case BotActionType::DEFENSE:
                 if (($state['defense_points'] ?? 0) < ($state['building_points'] ?? 0) * 0.15) {

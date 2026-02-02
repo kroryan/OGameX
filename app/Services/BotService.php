@@ -427,7 +427,12 @@ class BotService
             // Storage pressured: spend more to avoid waste
             $reserve = min($reserve, 0.15);
         }
-        // Otherwise use the configured reserve (default 30%), no longer inflating to 60-90%
+
+        // Aggressive spending when storage is very high to avoid waste
+        $aggressiveThreshold = (float) config('bots.storage_aggressive_spend_threshold', 0.80);
+        if ($usagePercent >= $aggressiveThreshold) {
+            $reserve = min($reserve, 0.05); // Nearly zero reserve
+        }
 
         return $total * max(0, 1 - $reserve);
     }
@@ -455,6 +460,37 @@ class BotService
         $economy = $this->bot->getEconomySettings();
         $maxStorageBeforeSpending = (float) ($economy['max_storage_before_spending'] ?? 0.9);
         return $this->getStorageUsagePercent($planet) >= $maxStorageBeforeSpending;
+    }
+
+    /**
+     * Calculate hours until any storage overflows on a planet based on production rates.
+     */
+    public function getHoursUntilStorageFull(PlanetService $planet): float
+    {
+        try {
+            $resources = $planet->getResources();
+            $metalMax = $planet->metalStorage()->get();
+            $crystalMax = $planet->crystalStorage()->get();
+            $deutMax = $planet->deuteriumStorage()->get();
+
+            $metalProd = $this->estimateMineProduction('metal_mine', $planet->getObjectLevel('metal_mine'));
+            $crystalProd = $this->estimateMineProduction('crystal_mine', $planet->getObjectLevel('crystal_mine'));
+            $deutProd = $this->estimateMineProduction('deuterium_synthesizer', $planet->getObjectLevel('deuterium_synthesizer'));
+
+            $hoursToFullMetal = ($metalProd > 0 && $metalMax > $resources->metal->get())
+                ? ($metalMax - $resources->metal->get()) / $metalProd
+                : PHP_FLOAT_MAX;
+            $hoursToFullCrystal = ($crystalProd > 0 && $crystalMax > $resources->crystal->get())
+                ? ($crystalMax - $resources->crystal->get()) / $crystalProd
+                : PHP_FLOAT_MAX;
+            $hoursToFullDeut = ($deutProd > 0 && $deutMax > $resources->deuterium->get())
+                ? ($deutMax - $resources->deuterium->get()) / $deutProd
+                : PHP_FLOAT_MAX;
+
+            return min($hoursToFullMetal, $hoursToFullCrystal, $hoursToFullDeut);
+        } catch (Exception) {
+            return PHP_FLOAT_MAX;
+        }
     }
 
     private function shouldConsiderUnitForPersonality(string $machineName): bool
@@ -492,18 +528,30 @@ class BotService
             return false;
         }
 
-        // Personality influence on colonization timing
+        // Need astrophysics to have more than 1 planet
+        try {
+            $astroLevel = $this->player->getResearchLevel('astrophysics');
+            if ($currentPlanets >= 1 && $astroLevel < 1) {
+                return false;
+            }
+        } catch (Exception) {
+            // If can't check, allow colonization attempt
+        }
+
+        // Personality influence with much lower configurable thresholds
         $personality = $this->getPersonality();
+        $state = null;
         if (in_array($personality, [BotPersonality::AGGRESSIVE, BotPersonality::RAIDER])) {
             $state = (new GameStateAnalyzer())->analyzeCurrentState($this);
-            if (($state['fleet_points'] ?? 0) < 80000) {
+            $minFleet = (int) config('bots.colonization_aggressive_min_fleet', 5000);
+            if (($state['fleet_points'] ?? 0) < $minFleet) {
                 return false;
             }
         }
-        // Turtles delay colonization until they have solid defense
         if ($personality === BotPersonality::TURTLE) {
             $state = $state ?? (new GameStateAnalyzer())->analyzeCurrentState($this);
-            if (($state['defense_points'] ?? 0) < 5000) {
+            $minDefense = (int) config('bots.colonization_turtle_min_defense', 500);
+            if (($state['defense_points'] ?? 0) < $minDefense) {
                 return false;
             }
         }
@@ -871,10 +919,21 @@ class BotService
         $cargoCapacity = $fleet->getTotalCargoCapacity($this->player);
         if ($cargoCapacity > 0) {
             $available = $source->getResources();
-            $sendTotal = min((int)($cargoCapacity * 0.7), (int)($available->metal->get() + $available->crystal->get() + $available->deuterium->get()));
+            $totalAvailable = $available->metal->get() + $available->crystal->get() + $available->deuterium->get();
+            $sendTotal = min(
+                (int)($cargoCapacity * 0.7),
+                (int)($totalAvailable * 0.5) // Don't drain more than half the source planet
+            );
             if ($sendTotal > 0) {
-                $split = (int)($sendTotal / 3);
-                $resourcesToSend = new Resources($split, $split, $sendTotal - ($split * 2), 0);
+                // New colonies need mostly metal (for mines/solar), then crystal, then deut
+                $metalRatio = (float) config('bots.colonization_cargo_metal_ratio', 0.50);
+                $crystalRatio = (float) config('bots.colonization_cargo_crystal_ratio', 0.30);
+                $deutRatio = (float) config('bots.colonization_cargo_deut_ratio', 0.20);
+
+                $metalSend = min((int)($sendTotal * $metalRatio), $available->metal->get());
+                $crystalSend = min((int)($sendTotal * $crystalRatio), $available->crystal->get());
+                $deutSend = min((int)($sendTotal * $deutRatio), $available->deuterium->get());
+                $resourcesToSend = new Resources($metalSend, $crystalSend, $deutSend, 0);
             }
         }
 
@@ -905,35 +964,87 @@ class BotService
     private function findColonizationTarget(PlanetService $source): ?\OGame\Models\Planet\Coordinate
     {
         $coords = $source->getPlanetCoordinates();
-        $galaxy = $coords->galaxy;
         $maxSystems = \OGame\GameConstants\UniverseConstants::MAX_SYSTEM_COUNT;
 
+        // Tiered position preference: center positions have better fields and balanced temp
+        $positionTiers = [
+            [7, 8, 9],           // Tier 1: optimal
+            [5, 6, 10, 11],      // Tier 2: good
+            [4, 12],             // Tier 3: acceptable
+        ];
+
+        // Phase 1: Search same galaxy
+        $target = $this->searchColonizationInGalaxy($coords->galaxy, $coords->system, $maxSystems, $positionTiers);
+        if ($target !== null) {
+            return $target;
+        }
+
+        // Phase 2: Cross-galaxy search if enabled
+        if (config('bots.colonization_cross_galaxy', true)) {
+            try {
+                $settingsService = app(\OGame\Services\SettingsService::class);
+                $maxGalaxies = $settingsService->numberOfGalaxies();
+            } catch (Exception) {
+                $maxGalaxies = 5;
+            }
+
+            for ($g = 1; $g <= $maxGalaxies; $g++) {
+                if ($g === $coords->galaxy) {
+                    continue;
+                }
+                $target = $this->searchColonizationInGalaxy($g, rand(1, $maxSystems), $maxSystems, $positionTiers);
+                if ($target !== null) {
+                    return $target;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Search for an empty colonization target within a specific galaxy.
+     */
+    private function searchColonizationInGalaxy(int $galaxy, int $centerSystem, int $maxSystems, array $positionTiers): ?\OGame\Models\Planet\Coordinate
+    {
+        $maxAttempts = (int) config('bots.colonization_max_attempts', 60);
         $attempts = 0;
-        $preferredPositions = [4, 5, 6, 7, 8, 9, 10, 11, 12];
-        while ($attempts < 40) {
-            $systemOffset = rand(-30, 30);
-            $system = $coords->system + $systemOffset;
-            if ($system < 1 || $system > $maxSystems) {
-                $system = rand(1, $maxSystems);
-            }
+        $attemptsPerTier = max(5, (int) ($maxAttempts / count($positionTiers)));
 
-            $position = $preferredPositions[array_rand($preferredPositions)];
-            if (!$this->player->canColonizePosition($position)) {
+        foreach ($positionTiers as $positions) {
+            $tierAttempts = 0;
+
+            while ($tierAttempts < $attemptsPerTier && $attempts < $maxAttempts) {
+                $systemOffset = rand(-50, 50);
+                $system = $centerSystem + $systemOffset;
+                if ($system < 1) {
+                    $system += $maxSystems;
+                }
+                if ($system > $maxSystems) {
+                    $system -= $maxSystems;
+                }
+
+                $position = $positions[array_rand($positions)];
+
+                if (!$this->player->canColonizePosition($position)) {
+                    $attempts++;
+                    $tierAttempts++;
+                    continue;
+                }
+
+                $exists = Planet::where('galaxy', $galaxy)
+                    ->where('system', $system)
+                    ->where('planet', $position)
+                    ->where('destroyed', 0)
+                    ->exists();
+
+                if (!$exists) {
+                    return new \OGame\Models\Planet\Coordinate($galaxy, $system, $position);
+                }
+
                 $attempts++;
-                continue;
+                $tierAttempts++;
             }
-
-            $exists = Planet::where('galaxy', $galaxy)
-                ->where('system', $system)
-                ->where('planet', $position)
-                ->where('destroyed', 0)
-                ->exists();
-
-            if (!$exists) {
-                return new \OGame\Models\Planet\Coordinate($galaxy, $system, $position);
-            }
-
-            $attempts++;
         }
 
         return null;
@@ -1266,35 +1377,92 @@ class BotService
             $base -= ($currentLevel - 20) * 3; // Reduce priority for very high levels
         }
 
-        // Energy deficit: prioritize energy buildings
+        // Energy deficit: EMERGENCY priority for energy buildings
         try {
-            if ($planet->energy()->get() < 0) {
+            $energyBalance = $planet->energy()->get();
+            if ($energyBalance < 0) {
+                $emergencyBonus = (int) config('bots.energy_deficit_emergency_bonus', 100);
                 if (in_array($machineName, ['solar_plant', 'fusion_plant'])) {
-                    $base += 45;
+                    $base += $emergencyBonus; // Forces energy builds during crisis
+                } else {
+                    $base -= 30; // Discourage non-energy builds during energy crisis
                 }
             }
         } catch (Exception) {
             // Ignore energy errors
         }
 
-        // Storage urgency: if storage is nearly full, prioritize spending
+        // Storage forecasting: proactively build storage BEFORE overflow
         if (in_array($machineName, ['metal_store', 'crystal_store', 'deuterium_store'])) {
+            $hoursUntilFull = $this->getHoursUntilStorageFull($planet);
+            $threshold = (float) config('bots.storage_forecast_hours_threshold', 4);
+
+            if ($hoursUntilFull <= 1) {
+                $base += 80; // CRITICAL: storage about to overflow
+            } elseif ($hoursUntilFull <= $threshold) {
+                $base += 60; // URGENT: build storage proactively
+            } elseif ($hoursUntilFull <= $threshold * 2) {
+                $base += 30; // Plan ahead
+            }
+
+            // Also check per-resource: if THIS specific storage type is near full
             $resources = $planet->getResources();
-            $metalMax = $planet->metalStorage()->get();
-            if ($metalMax > 0 && $resources->metal->get() / $metalMax > 0.9) {
-                $base += 50; // Urgent!
+            $specificUsage = match ($machineName) {
+                'metal_store' => $planet->metalStorage()->get() > 0
+                    ? $resources->metal->get() / $planet->metalStorage()->get() : 0,
+                'crystal_store' => $planet->crystalStorage()->get() > 0
+                    ? $resources->crystal->get() / $planet->crystalStorage()->get() : 0,
+                'deuterium_store' => $planet->deuteriumStorage()->get() > 0
+                    ? $resources->deuterium->get() / $planet->deuteriumStorage()->get() : 0,
+                default => 0,
+            };
+            if ($specificUsage > 0.9) {
+                $base += 50;
             }
         }
+
+        // Production balance: deprioritize overproducing mines, boost underproducing
+        $imbalanceThreshold = (float) config('bots.production_imbalance_threshold', 0.40);
+        try {
+            if (in_array($machineName, ['metal_mine', 'crystal_mine', 'deuterium_synthesizer'])) {
+                $metalProd = $this->estimateMineProduction('metal_mine', $planet->getObjectLevel('metal_mine'));
+                $crystalProd = $this->estimateMineProduction('crystal_mine', $planet->getObjectLevel('crystal_mine'));
+                $deutProd = $this->estimateMineProduction('deuterium_synthesizer', $planet->getObjectLevel('deuterium_synthesizer'));
+                $totalProd = $metalProd + $crystalProd + $deutProd;
+
+                if ($totalProd > 0) {
+                    $avgProd = $totalProd / 3;
+                    $thisProd = match ($machineName) {
+                        'metal_mine' => $metalProd,
+                        'crystal_mine' => $crystalProd,
+                        'deuterium_synthesizer' => $deutProd,
+                        default => null,
+                    };
+
+                    if ($thisProd !== null && $avgProd > 0) {
+                        $ratio = $thisProd / $avgProd;
+                        if ($ratio > (1 + $imbalanceThreshold)) {
+                            $penalty = (int)(($ratio - 1) * 30);
+                            $base -= min(40, $penalty);
+                        } elseif ($ratio < (1 - $imbalanceThreshold)) {
+                            $bonus = (int)((1 - $ratio) * 30);
+                            $base += min(40, $bonus);
+                        }
+                    }
+                }
+            }
+        } catch (Exception) {}
 
         if ($machineName === 'terraformer' && $this->isPlanetFieldFull($planet)) {
             $base += 80;
         }
 
-        // ROI: prefer upgrades with fast payback
+        // ROI: prefer upgrades with fast payback (uncapped from 40 to configurable 80)
         $productionGain = $this->estimateProductionGain($machineName, $planet, $currentLevel);
         if ($productionGain > 0 && $cost > 0) {
             $dailyGain = $productionGain * 24;
-            $roiScore = (int)min(40, ($dailyGain / $cost) * 200);
+            $roiCap = (int) config('bots.roi_score_cap', 80);
+            $roiScore = (int)min($roiCap, ($dailyGain / $cost) * 200);
             $base += $roiScore;
         }
 
@@ -1750,7 +1918,7 @@ class BotService
         }
 
         if ($machineName === 'colony_ship' && $this->shouldColonize()) {
-            $base += 40;
+            $base += 200; // Very high urgency - colonization slot available
         }
 
         if ($planet && $machineName === 'solar_satellite') {
@@ -3000,60 +3168,267 @@ class BotService
     {
         try {
             $user = $this->player->getUser();
+            $allianceService = app(\OGame\Services\AllianceService::class);
+
             if ($user->alliance_id) {
                 if (config('bots.alliance_auto_accept', true)) {
                     $this->processAllianceApplications($user->alliance_id, $user->id);
                 }
+                // Try to invite nearby human players to the alliance
+                $this->tryInviteHumanPlayer($user->alliance_id);
                 return;
             }
 
-            $cooldownMinutes = (int) config('bots.alliance_action_cooldown_minutes', 360);
+            $cooldownMinutes = (int) config('bots.alliance_action_cooldown_minutes', 120);
             $cacheKey = 'bot_alliance_action_' . $this->bot->id;
-            $lastAction = cache()->get($cacheKey);
-            if ($lastAction) {
+            if (cache()->get($cacheKey)) {
                 return;
             }
 
-            $applyChance = (float) config('bots.alliance_apply_chance', 0.05);
+            $applyChance = (float) config('bots.alliance_apply_chance', 0.15);
             if (mt_rand(1, 100) > ($applyChance * 100)) {
                 return;
             }
 
+            // Personality-weighted: join existing vs create new
+            $personality = $this->getPersonality();
+            $createWeight = match ($personality) {
+                BotPersonality::DIPLOMAT, BotPersonality::BALANCED => 25,
+                BotPersonality::AGGRESSIVE, BotPersonality::RAIDER => 40,
+                default => 15,
+            };
+            $shouldCreate = mt_rand(1, 100) <= $createWeight;
+
             $maxMembers = (int) config('bots.alliance_max_members', 30);
-            $openAlliance = Alliance::where('is_open', true)
-                ->withCount('members')
-                ->having('members_count', '<', $maxMembers)
-                ->inRandomOrder()
-                ->first();
-            $allianceService = app(\OGame\Services\AllianceService::class);
 
-            if ($openAlliance) {
-                $allianceService->applyToAlliance($user->id, $openAlliance->id, 'Bot auto-application');
-                cache()->put($cacheKey, now()->timestamp, now()->addMinutes($cooldownMinutes));
+            if (!$shouldCreate) {
+                // Prioritize human-created alliances for mixed alliances
+                $botUserIds = Bot::pluck('user_id')->toArray();
+                $humanAlliance = Alliance::where('is_open', true)
+                    ->whereNotIn('founder_user_id', $botUserIds)
+                    ->withCount('members')
+                    ->having('members_count', '<', $maxMembers)
+                    ->inRandomOrder()
+                    ->first();
+
+                if ($humanAlliance) {
+                    $message = $this->getPersonalityApplicationMessage();
+                    $allianceService->applyToAlliance($user->id, $humanAlliance->id, $message);
+                    cache()->put($cacheKey, now()->timestamp, now()->addMinutes($cooldownMinutes));
+                    return;
+                }
+
+                // Fallback: join any open alliance
+                $anyAlliance = Alliance::where('is_open', true)
+                    ->withCount('members')
+                    ->having('members_count', '<', $maxMembers)
+                    ->inRandomOrder()
+                    ->first();
+
+                if ($anyAlliance) {
+                    $message = $this->getPersonalityApplicationMessage();
+                    $allianceService->applyToAlliance($user->id, $anyAlliance->id, $message);
+                    cache()->put($cacheKey, now()->timestamp, now()->addMinutes($cooldownMinutes));
+                    return;
+                }
+            }
+
+            // Create a new alliance (max 10 bot-created)
+            $maxAlliances = (int) config('bots.alliance_max_created', 10);
+            $botUserIds = $botUserIds ?? Bot::pluck('user_id')->toArray();
+            $currentBotAlliances = Alliance::whereIn('founder_user_id', $botUserIds)->count();
+            if ($currentBotAlliances >= $maxAlliances) {
+                // Can't create more, try joining instead
+                $anyAlliance = Alliance::where('is_open', true)
+                    ->withCount('members')
+                    ->having('members_count', '<', $maxMembers)
+                    ->inRandomOrder()
+                    ->first();
+                if ($anyAlliance) {
+                    $allianceService->applyToAlliance($user->id, $anyAlliance->id, $this->getPersonalityApplicationMessage());
+                    cache()->put($cacheKey, now()->timestamp, now()->addMinutes($cooldownMinutes));
+                }
                 return;
             }
 
-            $createChance = (float) config('bots.alliance_create_chance', 0.02);
-            if (mt_rand(1, 100) > ($createChance * 100)) {
-                return;
+            $allianceData = $this->getPersonalityAllianceName();
+            $tag = $allianceData['tag'];
+            $name = $allianceData['name'];
+
+            // Ensure tag uniqueness
+            $attempt = 0;
+            while (Alliance::where('alliance_tag', $tag)->exists() && $attempt < 5) {
+                $tag = substr($tag, 0, 3) . mt_rand(0, 9);
+                $attempt++;
+            }
+            if (Alliance::where('alliance_tag', $tag)->exists()) {
+                $tag = strtoupper(Str::random(4));
+            }
+            // Ensure name uniqueness
+            if (Alliance::where('alliance_name', $name)->exists()) {
+                $name = $name . ' ' . mt_rand(1, 99);
             }
 
-            $maxAlliances = (int) config('bots.alliance_max_created', 50);
-            $currentAlliances = Alliance::count();
-            if ($currentAlliances >= $maxAlliances) {
-                return;
-            }
-
-            $tag = strtoupper(Str::random(4));
-            $name = 'Bot Legion ' . strtoupper(Str::random(3));
             $alliance = $allianceService->createAlliance($user->id, $tag, $name);
             $alliance->is_open = true;
-            $alliance->application_text = 'Bots and players welcome.';
+            $alliance->application_text = $allianceData['description'];
             $alliance->save();
             cache()->put($cacheKey, now()->timestamp, now()->addMinutes($cooldownMinutes));
         } catch (Exception $e) {
             logger()->warning("Bot {$this->bot->id}: ensureAlliance failed: {$e->getMessage()}");
         }
+    }
+
+    /**
+     * Try to invite a nearby human player to the bot's alliance.
+     */
+    private function tryInviteHumanPlayer(int $allianceId): void
+    {
+        try {
+            $personality = $this->getPersonality();
+            $baseChance = (float) config('bots.alliance_invite_human_chance', 0.10);
+            if ($personality === BotPersonality::DIPLOMAT) {
+                $baseChance += (float) config('bots.alliance_diplomat_bonus_chance', 0.20);
+            } elseif (in_array($personality, [BotPersonality::BALANCED, BotPersonality::EXPLORER])) {
+                $baseChance += 0.05;
+            }
+
+            if (mt_rand(1, 100) > ($baseChance * 100)) {
+                return;
+            }
+
+            // Find the bot's main planet coordinates
+            $planets = $this->player->planets->all();
+            if (empty($planets)) {
+                return;
+            }
+            $mainPlanet = reset($planets);
+            $coords = $mainPlanet->getPlanetCoordinates();
+
+            // Find human players near the bot who have no alliance
+            $botUserIds = Bot::pluck('user_id')->toArray();
+            $nearbyHuman = Planet::where('galaxy', $coords->galaxy)
+                ->whereBetween('system', [max(1, $coords->system - 50), $coords->system + 50])
+                ->where('destroyed', 0)
+                ->whereNotIn('user_id', $botUserIds)
+                ->whereHas('user', function ($q) {
+                    $q->whereNull('alliance_id');
+                })
+                ->inRandomOrder()
+                ->first();
+
+            if (!$nearbyHuman) {
+                return;
+            }
+
+            // Send an invitation message via the game messaging system
+            $playerServiceFactory = app(\OGame\Factories\PlayerServiceFactory::class);
+            $targetPlayer = $playerServiceFactory->make($nearbyHuman->user_id);
+            $messageService = new \OGame\Services\MessageService($targetPlayer);
+
+            $alliance = Alliance::find($allianceId);
+            if (!$alliance) {
+                return;
+            }
+
+            $messageService->sendSystemMessageToPlayer(
+                $targetPlayer,
+                \OGame\GameMessages\AllianceApplicationReceived::class,
+                [
+                    'applicant_name' => $this->bot->name,
+                    'application_message' => "Greetings! Join [{$alliance->alliance_tag}] {$alliance->alliance_name}! We welcome all players.",
+                ]
+            );
+        } catch (Exception $e) {
+            // Non-critical - don't log to avoid spam
+        }
+    }
+
+    /**
+     * Get personality-themed alliance name and tag.
+     */
+    private function getPersonalityAllianceName(): array
+    {
+        $personality = $this->getPersonality();
+
+        $pools = [
+            'aggressive' => [
+                ['WRF', 'War Front', 'Warriors and conquerors united for galactic domination.'],
+                ['BLD', 'Bloodhounds', 'The hunt never stops. Join if you dare.'],
+                ['IRN', 'Iron Wolves', 'Strength in numbers. Fear in our name.'],
+                ['STK', 'StrikeForce', 'Swift strikes, no mercy. Apply now.'],
+                ['RGE', 'The Rage', 'Unleash your fury upon the galaxy.'],
+            ],
+            'defensive' => [
+                ['SHL', 'Shield Wall', 'United defense against all threats.'],
+                ['FRT', 'Fortress', 'Impenetrable. Unbreakable. Join our walls.'],
+                ['GRD', 'The Guard', 'Protecting our members is our mission.'],
+                ['BAS', 'Bastion', 'Stand strong together behind our shields.'],
+                ['IVY', 'Iron Veil', 'Hidden strength behind iron curtains.'],
+            ],
+            'economic' => [
+                ['TRD', 'Trade Union', 'Prosperity through cooperation and trade.'],
+                ['SYN', 'Syndicate', 'Business is booming. Join the profits.'],
+                ['NXS', 'Nexus Corp', 'The galaxy runs on resources. We control them.'],
+                ['GLD', 'Gold Rush', 'Mine, trade, prosper together.'],
+                ['MKT', 'The Market', 'Commerce and growth for all members.'],
+            ],
+            'diplomat' => [
+                ['UNT', 'United', 'Unity is strength. All are welcome.'],
+                ['PAX', 'Pax Nova', 'Peace and prosperity for all.'],
+                ['EMB', 'Embassy', 'Diplomacy first, always.'],
+                ['CNC', 'The Council', 'Wise leaders, strong alliance.'],
+                ['HRM', 'Harmony', 'Balance in all things.'],
+            ],
+            'explorer' => [
+                ['VYG', 'Voyagers', 'The universe awaits. Explore with us.'],
+                ['FRN', 'Frontier', 'Pushing boundaries, discovering new worlds.'],
+                ['DSC', 'Discovery', 'Every star hides a secret.'],
+                ['NMD', 'Nomads', 'Home is wherever we travel next.'],
+                ['PTH', 'Pathfinders', 'Charting the unknown together.'],
+            ],
+            'default' => [
+                ['ALX', 'Alliance X', 'A new alliance for all players.'],
+                ['GLD', 'The Guild', 'Strength in unity.'],
+                ['ORD', 'New Order', 'Building a better galaxy together.'],
+                ['STR', 'Star League', 'Among the stars, we rise.'],
+                ['NVA', 'Nova', 'Bright futures ahead.'],
+            ],
+        ];
+
+        $key = match ($personality) {
+            BotPersonality::AGGRESSIVE, BotPersonality::RAIDER => 'aggressive',
+            BotPersonality::DEFENSIVE, BotPersonality::TURTLE => 'defensive',
+            BotPersonality::ECONOMIC, BotPersonality::SCIENTIST => 'economic',
+            BotPersonality::DIPLOMAT => 'diplomat',
+            BotPersonality::EXPLORER => 'explorer',
+            default => 'default',
+        };
+
+        $pool = $pools[$key] ?? $pools['default'];
+        $choice = $pool[array_rand($pool)];
+
+        return [
+            'tag' => $choice[0],
+            'name' => $choice[1],
+            'description' => $choice[2],
+        ];
+    }
+
+    /**
+     * Get a personality-themed application message.
+     */
+    private function getPersonalityApplicationMessage(): string
+    {
+        $personality = $this->getPersonality();
+        return match ($personality) {
+            BotPersonality::AGGRESSIVE, BotPersonality::RAIDER => 'Ready for battle. Looking for strong allies.',
+            BotPersonality::DEFENSIVE, BotPersonality::TURTLE => 'Seeking a safe alliance. I can help defend.',
+            BotPersonality::ECONOMIC, BotPersonality::SCIENTIST => 'Looking to trade and grow together.',
+            BotPersonality::DIPLOMAT => 'I bring peace and cooperation.',
+            BotPersonality::EXPLORER => 'Exploring the universe, seeking companions.',
+            default => 'Looking for an alliance to join.',
+        };
     }
 
     private function processAllianceApplications(int $allianceId, int $userId): void

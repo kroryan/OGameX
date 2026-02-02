@@ -50,6 +50,7 @@ Disclaimer: this project is purely fan-based and does not contain any commercial
 - Latest stable release **(0.13.0)**: [https://release.ogamex.dev](https://release.ogamex.dev)
 
 ## 📝 Table of Contents
+- [0. Quick Start (First Admin Account)](#quick-start)
 - [1. Example screenshots](#screenshots)
 - [2. About the author](#author)
 - [3. Goal](#goal)
@@ -65,6 +66,33 @@ Disclaimer: this project is purely fan-based and does not contain any commercial
 - [10. Sponsorship](#sponsorship)
 - [11. License](#license)
 - [12. OGameX related projects](#related-projects)
+
+## <a name="quick-start"></a> ✅ 0. Quick Start (First Admin Account)
+
+If you are running locally with Docker and need the first admin account:
+
+1) Start the stack (DB + app):
+```bash
+docker compose up -d
+```
+
+2) Run migrations:
+```bash
+docker compose exec -T ogamex-app php artisan migrate --force
+```
+
+3) Create your first admin account.
+The first non-Legor user created will automatically get the admin role.
+
+Option A: register in the UI (recommended).
+Open the app in your browser, register a new user, and the first account will become admin.
+
+Option B: create via CLI:
+```bash
+docker compose exec -T ogamex-app php artisan tinker --execute='$email="admin@example.com"; $pass="ChangeMe123!"; $creator=app(\OGame\Actions\Fortify\CreateNewUser::class); $creator->create(["email"=>$email,"password"=>$pass]);'
+```
+
+4) Log in and open `/admin` to access the admin panel.
 
 ## <a name="screenshots"></a> 🖥️ 1. Example screenshots
 

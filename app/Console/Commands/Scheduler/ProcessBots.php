@@ -115,6 +115,14 @@ class ProcessBots extends Command
         // Initialize traits if not set
         $this->ensureTraits($botModel);
 
+        // System 7: Diplomatic relations decay/update (lightweight)
+        try {
+            $intel = new BotIntelligenceService();
+            $intel->updateDiplomaticRelations($botModel->id);
+        } catch (\Exception $e) {
+            // Non-critical
+        }
+
         // Fleet save schedule check
         if ($bot->shouldFleetSaveBySchedule() && $bot->performFleetSave(true)) {
             $this->line('  - Scheduled fleet save executed');
@@ -169,6 +177,26 @@ class ProcessBots extends Command
             try {
                 $bot->analyzeCompletedMissions();
                 $bot->analyzeCompletedExpeditions();
+            } catch (\Exception $e) {
+                // Non-critical
+            }
+        }
+
+        // System 4: Alliance coordination (ACS) + intel sharing
+        if (mt_rand(1, 10) === 1) {
+            try {
+                if ($bot->trySendAcsDefend()) {
+                    $this->line('  - ACS defend sent to ally');
+                }
+            } catch (\Exception $e) {
+                // Non-critical
+            }
+        }
+        if (mt_rand(1, 20) === 1) {
+            try {
+                if ($bot->shareIntel()) {
+                    $this->line('  - Shared intel with allies');
+                }
             } catch (\Exception $e) {
                 // Non-critical
             }
@@ -290,7 +318,7 @@ class ProcessBots extends Command
     {
         return match ($action) {
             BotActionType::BUILD => $this->handleBuildAction($bot),
-            BotActionType::RESEARCH => $bot->researchRandomTech(),
+            BotActionType::RESEARCH => $this->handleResearchAction($bot),
             BotActionType::FLEET => $this->handleFleetAction($bot, $decisionService),
             BotActionType::ATTACK => $this->handleAttackAction($bot),
             BotActionType::TRADE => $bot->sendResourceTransport(),
@@ -301,38 +329,53 @@ class ProcessBots extends Command
     }
 
     /**
-     * Handle build action - checks for strategic plan first.
+     * Handle build action - enforces strategic plans 80% of the time.
      */
     private function handleBuildAction(BotService $bot): bool
     {
-        // Check if strategic planner has a specific building step
         $botId = $bot->getBot()->id;
-        $planned = cache()->get("bot:{$botId}:planned_step");
 
-        if ($planned && ($planned['step']['type'] ?? '') === 'building') {
-            $step = $planned['step'];
-            try {
-                $planet = $bot->getRichestPlanet();
-                if ($planet && \OGame\Services\ObjectService::objectRequirementsMet($step['name'], $planet)) {
-                    $building = \OGame\Services\ObjectService::getObjectByMachineName($step['name']);
-                    if ($building) {
-                        $queueService = app(\OGame\Services\BuildingQueueService::class);
-                        if (!$bot->isBuildingQueueFull($planet)) {
+        // 80% chance to follow strategic plan, 20% variety/random
+        if (mt_rand(1, 100) <= 80) {
+            $planner = new BotStrategicPlannerService();
+            $planned = $planner->getNextPlannedAction($bot);
+
+            if ($planned && ($planned['step']['type'] ?? '') === 'building') {
+                $step = $planned['step'];
+                try {
+                    // Try on each planet, not just richest
+                    foreach ($bot->getPlayer()->planets->all() as $planet) {
+                        if ($bot->isBuildingQueueFull($planet)) {
+                            continue;
+                        }
+                        $currentLevel = $planet->getObjectLevel($step['name']);
+                        if ($currentLevel >= ($step['level'] ?? 1)) {
+                            continue;
+                        }
+                        if (!\OGame\Services\ObjectService::objectRequirementsMet($step['name'], $planet)) {
+                            continue;
+                        }
+                        $price = \OGame\Services\ObjectService::getObjectPrice($step['name'], $planet);
+                        $resources = $planet->getResources();
+                        if ($resources->metal->get() < $price->metal->get()
+                            || $resources->crystal->get() < $price->crystal->get()
+                            || $resources->deuterium->get() < $price->deuterium->get()) {
+                            continue;
+                        }
+
+                        $building = \OGame\Services\ObjectService::getObjectByMachineName($step['name']);
+                        if ($building) {
+                            $queueService = app(\OGame\Services\BuildingQueueService::class);
                             $queueService->add($planet, $building->id);
-                            $bot->logAction(BotActionType::BUILD, "Planned build: {$step['name']} on {$planet->getPlanetName()}", []);
-                            // Advance the plan
-                            if (isset($planned['plan_id'])) {
-                                (new BotStrategicPlannerService())->completeStep($planned['plan_id']);
-                            }
-                            cache()->forget("bot:{$botId}:planned_step");
+                            $bot->logAction(BotActionType::BUILD, "Strategic plan: {$step['name']} L{$step['level']} on {$planet->getPlanetName()}", []);
+                            $planner->completeStep($planned['plan_id']);
                             return true;
                         }
                     }
+                } catch (\Exception $e) {
+                    logger()->warning("Bot {$botId}: planned build failed: {$e->getMessage()}");
                 }
-            } catch (\Exception $e) {
-                logger()->warning("Bot {$botId}: planned build failed: {$e->getMessage()}");
             }
-            cache()->forget("bot:{$botId}:planned_step");
         }
 
         return $bot->buildRandomStructure();
@@ -340,6 +383,7 @@ class ProcessBots extends Command
 
     /**
      * Handle fleet action (build units, expedition, colonization, recycling).
+     * Enforces strategic plans for unit building 80% of the time.
      */
     private function handleFleetAction(BotService $bot, BotDecisionService $decisionService): bool
     {
@@ -365,34 +409,82 @@ class ProcessBots extends Command
             return true;
         }
 
-        // Check for planned unit step
-        $botId = $bot->getBot()->id;
-        $planned = cache()->get("bot:{$botId}:planned_step");
-        if ($planned && ($planned['step']['type'] ?? '') === 'unit') {
-            cache()->forget("bot:{$botId}:planned_step");
-            // Build the planned unit
-            $step = $planned['step'];
-            try {
-                $planet = $bot->getRichestPlanet();
-                if ($planet && \OGame\Services\ObjectService::objectRequirementsMet($step['name'], $planet)) {
-                    $unit = \OGame\Services\ObjectService::getObjectByMachineName($step['name']);
-                    if ($unit) {
-                        $amount = min($step['amount'] ?? 1, 100);
-                        $queueService = app(\OGame\Services\UnitQueueService::class);
-                        $queueService->add($planet, $unit->id, $amount);
-                        $bot->logAction(BotActionType::FLEET, "Planned build: {$amount}x {$step['name']}", []);
-                        if (isset($planned['plan_id'])) {
-                            (new BotStrategicPlannerService())->completeStep($planned['plan_id']);
+        // 80% chance to follow strategic plan for unit building
+        if (mt_rand(1, 100) <= 80) {
+            $planner = new BotStrategicPlannerService();
+            $planned = $planner->getNextPlannedAction($bot);
+
+            if ($planned && ($planned['step']['type'] ?? '') === 'unit') {
+                $step = $planned['step'];
+                try {
+                    $planet = $bot->getRichestPlanet();
+                    if ($planet && !$bot->isUnitQueueFull($planet)
+                        && \OGame\Services\ObjectService::objectRequirementsMet($step['name'], $planet)) {
+                        $unit = \OGame\Services\ObjectService::getObjectByMachineName($step['name']);
+                        if ($unit) {
+                            $price = \OGame\Services\ObjectService::getObjectPrice($step['name'], $planet);
+                            $resources = $planet->getResources();
+                            $maxAffordable = min(
+                                $price->metal->get() > 0 ? (int)($resources->metal->get() / $price->metal->get()) : 999,
+                                $price->crystal->get() > 0 ? (int)($resources->crystal->get() / $price->crystal->get()) : 999,
+                                $price->deuterium->get() > 0 ? (int)($resources->deuterium->get() / $price->deuterium->get()) : 999,
+                            );
+                            $amount = min($step['amount'] ?? 1, $maxAffordable, 100);
+                            if ($amount >= 1) {
+                                $queueService = app(\OGame\Services\UnitQueueService::class);
+                                $queueService->add($planet, $unit->id, $amount);
+                                $bot->logAction(BotActionType::FLEET, "Strategic plan: {$amount}x {$step['name']}", []);
+                                $planner->completeStep($planned['plan_id']);
+                                return true;
+                            }
                         }
-                        return true;
                     }
+                } catch (\Exception $e) {
+                    logger()->warning("Bot {$bot->getBot()->id}: planned unit build failed: {$e->getMessage()}");
                 }
-            } catch (\Exception $e) {
-                logger()->warning("Bot {$botId}: planned unit build failed: {$e->getMessage()}");
             }
         }
 
         return $bot->buildRandomUnit();
+    }
+
+    /**
+     * Handle research action - enforces strategic tech chain plans 80% of the time.
+     */
+    private function handleResearchAction(BotService $bot): bool
+    {
+        // 80% chance to follow strategic plan for research
+        if (mt_rand(1, 100) <= 80) {
+            $planner = new BotStrategicPlannerService();
+            $planned = $planner->getNextPlannedAction($bot);
+
+            if ($planned && ($planned['step']['type'] ?? '') === 'research') {
+                $step = $planned['step'];
+                try {
+                    $planet = $bot->findPlanetWithResearchQueueSpace();
+                    if ($planet && \OGame\Services\ObjectService::objectRequirementsMet($step['name'], $planet)) {
+                        $price = \OGame\Services\ObjectService::getObjectPrice($step['name'], $planet);
+                        $resources = $planet->getResources();
+                        if ($resources->metal->get() >= $price->metal->get()
+                            && $resources->crystal->get() >= $price->crystal->get()
+                            && $resources->deuterium->get() >= $price->deuterium->get()) {
+                            $tech = \OGame\Services\ObjectService::getObjectByMachineName($step['name']);
+                            if ($tech) {
+                                $queueService = app(\OGame\Services\ResearchQueueService::class);
+                                $queueService->add($planet, $tech->id);
+                                $bot->logAction(BotActionType::RESEARCH, "Strategic plan: {$step['name']} L{$step['level']}", []);
+                                $planner->completeStep($planned['plan_id']);
+                                return true;
+                            }
+                        }
+                    }
+                } catch (\Exception $e) {
+                    logger()->warning("Bot {$bot->getBot()->id}: planned research failed: {$e->getMessage()}");
+                }
+            }
+        }
+
+        return $bot->researchRandomTech();
     }
 
     /**
@@ -431,6 +523,21 @@ class ProcessBots extends Command
             }
         } catch (\Exception $e) {
             // Non-critical, proceed with attack
+        }
+
+        // System 5: Check battle history win rate before attacking known target
+        try {
+            if ($target) {
+                $targetUserId = $target->getPlayer()->getId();
+                $targetFinder = app(\OGame\Services\BotTargetFinderService::class);
+                $winRate = $targetFinder->getWinRateAgainst($botId, $targetUserId);
+                if ($winRate !== null && $winRate < 0.30) {
+                    $bot->logAction(BotActionType::ATTACK, "Skipping: low win rate against target ({$winRate})", ['win_rate' => $winRate], 'failed');
+                    return false;
+                }
+            }
+        } catch (\Exception $e) {
+            // Non-critical
         }
 
         return $bot->sendAttackFleet();
@@ -598,12 +705,23 @@ class ProcessBots extends Command
             $this->line('  - Defensive: jump gate evacuation');
         }
 
-        if ($bot->performFleetSave()) {
-            $this->line('  - Defensive: fleet save initiated');
+        $didNinjaDefend = false;
+        if ($bot->shouldNinjaDefend()) {
+            $this->line('  - Defensive: ninja defense (staying to fight)');
+            $this->handleDefenseAction($bot);
+            $didNinjaDefend = true;
+        } else {
+            if ($bot->optimizedFleetSave()) {
+                $this->line('  - Defensive: optimized fleet save initiated');
+            } elseif ($bot->performFleetSave()) {
+                $this->line('  - Defensive: fleet save initiated');
+            }
         }
 
         // Also try to build defenses while under threat
-        $this->handleDefenseAction($bot);
+        if (!$didNinjaDefend) {
+            $this->handleDefenseAction($bot);
+        }
 
         $bot->getBot()->updateLastAction();
         $this->line('  - Defensive: threat response complete');

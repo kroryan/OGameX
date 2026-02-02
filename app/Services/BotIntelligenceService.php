@@ -196,6 +196,86 @@ class BotIntelligenceService
     }
 
     /**
+     * Gradually decay diplomatic threat scores toward neutral.
+     */
+    public function updateDiplomaticRelations(int $botId): void
+    {
+        try {
+            $entries = BotThreatMap::where('bot_id', $botId)->get();
+            foreach ($entries as $entry) {
+                $score = (int) $entry->threat_score;
+                if ($score > 0) {
+                    $score -= 1;
+                } elseif ($score < 0) {
+                    $score += 1;
+                }
+
+                if ($entry->is_ally) {
+                    $score = min($score, -50);
+                }
+                if ($entry->is_nap) {
+                    $score = min($score, 0);
+                }
+
+                if ($score !== (int) $entry->threat_score) {
+                    $entry->threat_score = $score;
+                    $entry->save();
+                }
+            }
+        } catch (\Exception $e) {
+            // Non-critical
+        }
+    }
+
+    /**
+     * Get diplomatic relation label for a target.
+     */
+    public function getDiplomaticRelation(int $botId, int $targetUserId): string
+    {
+        $entry = BotThreatMap::where('bot_id', $botId)
+            ->where('threat_user_id', $targetUserId)
+            ->first();
+
+        if ($entry && $entry->is_ally) {
+            return 'strong_ally';
+        }
+
+        $score = $entry ? (int) $entry->threat_score : 0;
+        if ($score <= -10) {
+            return 'friendly';
+        }
+        if ($score >= 60) {
+            return 'enemy';
+        }
+        if ($score >= 20) {
+            return 'hostile';
+        }
+
+        return 'neutral';
+    }
+
+    /**
+     * Record trade interaction to reduce threat score.
+     */
+    public function recordTradeInteraction(int $botId, int $targetUserId): void
+    {
+        $entry = BotThreatMap::firstOrCreate(
+            ['bot_id' => $botId, 'threat_user_id' => $targetUserId],
+            ['threat_score' => 0]
+        );
+
+        $entry->threat_score = max(-100, (int) $entry->threat_score - 5);
+        if ($entry->is_ally) {
+            $entry->threat_score = min($entry->threat_score, -50);
+        }
+        if ($entry->is_nap) {
+            $entry->threat_score = min($entry->threat_score, 0);
+        }
+        $entry->last_interaction_at = now();
+        $entry->save();
+    }
+
+    /**
      * Check if a user is considered dangerous.
      */
     public function isUserDangerous(int $botId, int $targetUserId): bool

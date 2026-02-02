@@ -2,6 +2,9 @@
 
 namespace OGame\Services;
 
+use OGame\Models\BotThreatMap;
+use OGame\Models\Planet;
+
 /**
  * GameStateAnalyzer - Analyzes the current game state for strategic decision-making.
  */
@@ -186,6 +189,7 @@ class GameStateAnalyzer
             'planet_situations' => $planetSituations,
             'min_hours_until_storage_full' => $minHoursUntilStorageFull < PHP_FLOAT_MAX ? $minHoursUntilStorageFull : 999,
             'has_energy_crisis' => $hasEnergyCrisis,
+            'geopolitical_modifiers' => $this->analyzeGeopoliticalSituation($botService),
         ];
     }
 
@@ -230,6 +234,111 @@ class GameStateAnalyzer
             abs($resources['deuterium'] - $avg)
         );
         return $maxDiff / $avg;
+    }
+
+    /**
+     * Analyze nearby geopolitical situation and return action modifiers.
+     *
+     * @return array{defense_mod: float, offense_mod: float, economy_mod: float, expansion_mod: float}
+     */
+    public function analyzeGeopoliticalSituation(BotService $botService): array
+    {
+        $botId = $botService->getBot()->id;
+        $cacheKey = "bot:{$botId}:geopolitical";
+        $cached = cache()->get($cacheKey);
+        if (is_array($cached)) {
+            return $cached;
+        }
+
+        $defaults = [
+            'defense_mod' => 1.0,
+            'offense_mod' => 1.0,
+            'economy_mod' => 1.0,
+            'expansion_mod' => 1.0,
+        ];
+
+        $source = $botService->getRichestPlanet();
+        if ($source === null) {
+            cache()->put($cacheKey, $defaults, now()->addMinutes(30));
+            return $defaults;
+        }
+
+        $coords = $source->getPlanetCoordinates();
+        $range = (int) config('bots.geopolitical_system_range', 50);
+        $minSystem = max(1, $coords->system - $range);
+        $maxSystem = $coords->system + $range;
+        $selfId = $botService->getPlayer()->getId();
+
+        $botScore = 0;
+        try {
+            $highscore = $botService->getPlayer()->getUser()->highscore;
+            $botScore = $highscore ? (int) $highscore->general : 0;
+        } catch (\Exception) {
+            $botScore = 0;
+        }
+
+        $allyIds = BotThreatMap::where('bot_id', $botId)
+            ->where('is_ally', true)
+            ->pluck('threat_user_id')
+            ->toArray();
+
+        $neighbors = Planet::where('galaxy', $coords->galaxy)
+            ->whereBetween('system', [$minSystem, $maxSystem])
+            ->where('destroyed', 0)
+            ->whereNotNull('user_id')
+            ->where('user_id', '!=', $selfId)
+            ->with('user.highscore')
+            ->get();
+
+        $totalNeighbors = 0;
+        $stronger = 0;
+        $weaker = 0;
+        $allies = 0;
+
+        foreach ($neighbors as $planet) {
+            $user = $planet->user;
+            if (!$user) {
+                continue;
+            }
+            $totalNeighbors++;
+            if (in_array($user->id, $allyIds, true)) {
+                $allies++;
+            }
+
+            $score = $user->highscore ? (int) $user->highscore->general : 0;
+            if ($botScore > 0 && $score > 0) {
+                if ($score > $botScore) {
+                    $stronger++;
+                } elseif ($score < $botScore) {
+                    $weaker++;
+                }
+            }
+        }
+
+        $defenseMod = $defaults['defense_mod'];
+        $offenseMod = $defaults['offense_mod'];
+        $economyMod = $defaults['economy_mod'];
+        $expansionMod = $defaults['expansion_mod'];
+
+        if ($totalNeighbors > 0) {
+            $defenseMod = min(1.5, 1.0 + min(1.0, $stronger / $totalNeighbors) * 0.5);
+            $offenseMod = min(1.4, 1.0 + min(1.0, $weaker / $totalNeighbors) * 0.4);
+            $economyMod = min(1.3, 1.0 + min(1.0, $allies / $totalNeighbors) * 0.3);
+        }
+
+        if ($totalNeighbors <= 3) {
+            $expansionMod = 1.3;
+        }
+
+        $result = [
+            'defense_mod' => $defenseMod,
+            'offense_mod' => $offenseMod,
+            'economy_mod' => $economyMod,
+            'expansion_mod' => $expansionMod,
+        ];
+
+        cache()->put($cacheKey, $result, now()->addMinutes(30));
+        return $result;
     }
 
     /**

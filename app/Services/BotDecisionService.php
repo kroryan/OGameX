@@ -147,6 +147,10 @@ class BotDecisionService
         foreach ($availableActions as $action) {
             $scoredActions[$action->value] = $this->scoreAction($action, $objective, $state);
         }
+        $scoredActions = array_filter($scoredActions, fn ($score) => $score > 0);
+        if (empty($scoredActions)) {
+            return null;
+        }
 
         $bestAction = $this->selectBestAction($scoredActions);
         $this->logDecision($objective, $scoredActions, $bestAction);
@@ -191,11 +195,15 @@ class BotDecisionService
      */
     private function updateBotState(\OGame\Models\Bot $bot, array $state): void
     {
+        $botId = $bot->id;
         $currentState = $bot->getState();
+        $stateChangedKey = "bot:{$botId}:state_changed_at";
+        $lastChangedAt = cache()->get($stateChangedKey);
 
         if (!empty($state['is_under_threat'])) {
             if ($currentState !== 'defending') {
                 $bot->setState('defending');
+                cache()->put($stateChangedKey, now(), now()->addHours(1));
             }
             return;
         }
@@ -210,7 +218,23 @@ class BotDecisionService
         };
 
         if ($newState !== $currentState) {
+            if ($lastChangedAt) {
+                try {
+                    $lastChangedAt = $lastChangedAt instanceof \Carbon\Carbon
+                        ? $lastChangedAt
+                        : \Carbon\Carbon::parse($lastChangedAt);
+                    if (now()->diffInMinutes($lastChangedAt) < 15) {
+                        return; // Enforce minimum state duration
+                    }
+                } catch (\Exception) {
+                    // Ignore malformed cache
+                }
+            }
+
             $bot->setState($newState);
+            cache()->put($stateChangedKey, now(), now()->addHours(1));
+        } elseif (!$lastChangedAt) {
+            cache()->put($stateChangedKey, now(), now()->addHours(1));
         }
     }
 
@@ -249,7 +273,7 @@ class BotDecisionService
         if (!in_array('attack', $excludeTypes)
             && !$this->botService->shouldSkipAction('attack')
             && $this->botService->canAttack()
-            && $this->botService->hasFleetSlotsAvailable()
+            && $this->botService->hasFleetSlotsForAction()
             && ($state['has_significant_fleet'] ?? false)
             && !empty($state['has_attack_target'])
             && $slotUsage < 0.9) {
@@ -371,6 +395,9 @@ class BotDecisionService
 
         // State modifier
         $stateModifier = $this->getStateModifier($action, $state);
+        if ($stateModifier <= 0.0) {
+            return 0.0;
+        }
         $score *= $stateModifier;
 
         // Strategic bonus
@@ -394,6 +421,18 @@ class BotDecisionService
 
         // System 12: Highscore-aware scoring
         $score *= $this->getHighscoreModifier($action);
+
+        // System 10: Geopolitical situation modifier
+        if (!empty($state['geopolitical_modifiers'])) {
+            $geo = $state['geopolitical_modifiers'];
+            $score *= match ($action) {
+                BotActionType::ATTACK, BotActionType::ESPIONAGE => (float) ($geo['offense_mod'] ?? 1.0),
+                BotActionType::DEFENSE => (float) ($geo['defense_mod'] ?? 1.0),
+                BotActionType::BUILD, BotActionType::TRADE => (float) ($geo['economy_mod'] ?? 1.0),
+                BotActionType::FLEET => (float) (((float) ($geo['expansion_mod'] ?? 1.0) + (float) ($geo['offense_mod'] ?? 1.0)) / 2),
+                default => 1.0,
+            };
+        }
 
         return max(1.0, $score);
     }
@@ -524,11 +563,22 @@ class BotDecisionService
 
     /**
      * Get state modifier for an action.
+     * Returns 0.0 to completely block an action in certain states.
      */
     private function getStateModifier(BotActionType $action, array $state): float
     {
-        $modifier = 1.0;
+        $bot = $this->botService->getBot();
+        $botState = $bot->getState();
 
+        // Hard state machine constraints first
+        $stateConstraint = $this->getStateMachineConstraint($action, $botState);
+        if ($stateConstraint <= 0.0) {
+            return 0.0; // Blocked by state machine
+        }
+
+        $modifier = $stateConstraint;
+
+        // Layer situational modifiers on top
         switch ($action->value) {
             case 'build':
                 $richestPlanet = $this->botService->getRichestPlanet();
@@ -537,7 +587,7 @@ class BotDecisionService
                     $metalMax = $richestPlanet->metalStorage()->get();
                     $usagePercent = $metalMax > 0 ? $resources->metal->get() / $metalMax : 0;
                     if ($usagePercent > 0.9) {
-                        $modifier = 1.5;
+                        $modifier *= 1.5;
                     }
                 }
                 if (!empty($state['is_under_threat'])) {
@@ -547,7 +597,7 @@ class BotDecisionService
 
             case 'fleet':
                 if (($state['fleet_points'] ?? 0) > 200000) {
-                    $modifier = 0.7;
+                    $modifier *= 0.7;
                 }
                 if (!empty($state['is_under_threat'])) {
                     $modifier *= 1.4;
@@ -559,10 +609,10 @@ class BotDecisionService
 
             case 'attack':
                 if ($state['has_significant_fleet'] ?? false) {
-                    $modifier = 1.3;
+                    $modifier *= 1.3;
                 }
                 if (($state['total_resources_sum'] ?? 0) < 100000) {
-                    $modifier = 0.5;
+                    $modifier *= 0.5;
                 }
                 if (!empty($state['is_under_threat'])) {
                     $modifier *= 0.6;
@@ -574,9 +624,9 @@ class BotDecisionService
 
             case 'research':
                 if (($state['research_points'] ?? 0) < ($state['building_points'] ?? 0) * 0.5) {
-                    $modifier = 1.6;
+                    $modifier *= 1.6;
                 } elseif (($state['research_points'] ?? 0) < ($state['building_points'] ?? 0) * 0.3) {
-                    $modifier = 2.0;
+                    $modifier *= 2.0;
                 }
                 if (!empty($state['is_under_threat'])) {
                     $modifier *= 0.8;
@@ -584,23 +634,23 @@ class BotDecisionService
                 break;
 
             case 'trade':
-                $modifier = ($this->botService->isStoragePressureHigh()) ? 1.5 : 1.1;
+                if ($this->botService->isStoragePressureHigh()) {
+                    $modifier *= 1.5;
+                }
                 if (($state['resource_imbalance'] ?? 0.0) > 0.4) {
                     $modifier *= 1.3;
                 }
                 break;
 
             case 'espionage':
-                $modifier = 1.0;
-                // Boost espionage if we're about to attack
                 if (($state['has_significant_fleet'] ?? false) && ($state['fleet_slot_usage'] ?? 0.0) < 0.5) {
-                    $modifier = 1.5;
+                    $modifier *= 1.5;
                 }
                 break;
 
             case 'defense':
                 if (!empty($state['is_under_threat'])) {
-                    $modifier = 2.0;
+                    $modifier *= 2.0;
                 }
                 $defenseRatio = ($state['building_points'] ?? 0) > 0
                     ? ($state['defense_points'] ?? 0) / ($state['building_points'] ?? 1)
@@ -611,11 +661,66 @@ class BotDecisionService
                 break;
 
             case 'diplomacy':
-                $modifier = 0.8; // Low base modifier, boosted by traits
+                $modifier *= 0.8;
                 break;
         }
 
         return $modifier;
+    }
+
+    /**
+     * State machine hard constraints: what actions are allowed/boosted/blocked per state.
+     * Returns 0.0 = blocked, <1.0 = discouraged, 1.0 = normal, >1.0 = boosted.
+     */
+    private function getStateMachineConstraint(BotActionType $action, string $botState): float
+    {
+        return match ($botState) {
+            'defending' => match ($action) {
+                BotActionType::ATTACK => 0.0,      // BLOCKED: don't attack while defending
+                BotActionType::TRADE => 0.0,        // BLOCKED: no trades while under fire
+                BotActionType::ESPIONAGE => 0.0,    // BLOCKED: focus on defense
+                BotActionType::DEFENSE => 2.0,      // BOOSTED: build defenses
+                BotActionType::BUILD => 1.3,        // Slight boost: fortify
+                BotActionType::FLEET => 1.5,        // Build combat fleet
+                default => 1.0,
+            },
+            'saving' => match ($action) {
+                BotActionType::ATTACK => 0.0,       // BLOCKED: saving resources
+                BotActionType::FLEET => 0.3,        // Discouraged: saving
+                BotActionType::BUILD => 1.6,        // BOOSTED: spend on buildings
+                BotActionType::RESEARCH => 1.4,     // BOOSTED: spend on research
+                default => 1.0,
+            },
+            'raiding' => match ($action) {
+                BotActionType::ATTACK => 1.8,       // BOOSTED: primary focus
+                BotActionType::ESPIONAGE => 1.5,    // BOOSTED: intel for raids
+                BotActionType::FLEET => 1.2,        // Build raiding fleet
+                BotActionType::BUILD => 0.5,        // Reduced: focus on raids
+                BotActionType::RESEARCH => 0.5,     // Reduced
+                default => 1.0,
+            },
+            'building' => match ($action) {
+                BotActionType::BUILD => 1.6,        // BOOSTED: primary focus
+                BotActionType::RESEARCH => 1.4,     // BOOSTED
+                BotActionType::ATTACK => 0.3,       // Discouraged
+                BotActionType::FLEET => 0.6,        // Reduced
+                default => 1.0,
+            },
+            'colonizing' => match ($action) {
+                BotActionType::ATTACK => 0.0,       // BLOCKED: focus on colonization
+                BotActionType::FLEET => 1.5,        // BOOSTED: need colony ship
+                BotActionType::BUILD => 1.2,        // Build infrastructure
+                BotActionType::RESEARCH => 1.3,     // Need astrophysics
+                default => 1.0,
+            },
+            'planning' => match ($action) {
+                BotActionType::ESPIONAGE => 1.5,    // Gather intel
+                BotActionType::RESEARCH => 1.3,     // Research while planning
+                BotActionType::BUILD => 1.2,
+                default => 1.0,
+            },
+            default => 1.0, // 'exploring' or unknown: no constraints
+        };
     }
 
     private function getRoiBonus(BotActionType $action, array $state): float

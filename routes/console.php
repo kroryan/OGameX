@@ -5,6 +5,7 @@ use OGame\Console\Commands\Scheduler\DarkMatterRegenerateCommand;
 use OGame\Console\Commands\Scheduler\GenerateAllianceHighscores;
 use OGame\Console\Commands\Scheduler\GenerateHighscoreRanks;
 use OGame\Console\Commands\Scheduler\GenerateHighscores;
+use OGame\Console\Commands\Scheduler\ProcessBotEmergencies;
 use OGame\Console\Commands\Scheduler\ProcessBots;
 use OGame\Console\Commands\Scheduler\PruneBotLogs;
 use OGame\Console\Commands\Scheduler\ResetDebrisFields;
@@ -40,6 +41,9 @@ Schedule::command(DarkMatterRegenerateCommand::class)->everyFiveMinutes()->witho
 
 // Process active bots every 5 minutes
 Schedule::command(ProcessBots::class)->everyFiveMinutes();
+
+// Emergency threat checks every minute
+Schedule::command(ProcessBotEmergencies::class)->everyMinute()->withoutOverlapping();
 
 // Prune old bot logs daily at 3:00 AM
 Schedule::command(PruneBotLogs::class)->dailyAt('03:00')->withoutOverlapping();

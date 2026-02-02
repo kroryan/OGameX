@@ -27,6 +27,9 @@ class BotService
 {
     private Bot $bot;
     private PlayerService $player;
+    private bool $strategicSavingsChecked = false;
+    private ?array $strategicSavingsTarget = null;
+    private ?float $totalResourcesCache = null;
 
     public function __construct(Bot $bot, PlayerService $player)
     {
@@ -92,6 +95,19 @@ class BotService
         $limit = min($botCap, $playerCap);
 
         return $this->player->getFleetSlotsInUse() < $limit;
+    }
+
+    /**
+     * Check if bot can send a fleet for non-emergency actions (reserves 1 slot).
+     */
+    public function hasFleetSlotsForAction(): bool
+    {
+        $botCap = $this->bot->max_fleets_sent ?? config('bots.max_fleets_per_bot', 3);
+        $playerCap = $this->player->getFleetSlotsMax();
+        $limit = min($botCap, $playerCap);
+        $usable = max(0, $limit - 1);
+
+        return $this->player->getFleetSlotsInUse() < $usable;
     }
 
     /**
@@ -281,6 +297,7 @@ class BotService
             }
 
             $budget = $this->getSpendableBudget($planet, $ignoreReserve);
+            $baseBudget = $this->getBaseSpendableBudget($planet, $ignoreReserve);
             if ($budget <= 0) {
                 continue;
             }
@@ -304,6 +321,10 @@ class BotService
                 $price = ObjectService::getObjectPrice($building->machine_name, $planet);
                 $cost = $price->metal->get() + $price->crystal->get() + $price->deuterium->get();
                 if ($cost <= $budget) {
+                    return true;
+                }
+
+                if ($this->isEnergyBuilding($building->machine_name) && $cost <= $baseBudget) {
                     return true;
                 }
             }
@@ -401,6 +422,25 @@ class BotService
 
     private function getSpendableBudget(PlanetService $planet, bool $ignoreReserve = false): float
     {
+        $baseBudget = $this->getBaseSpendableBudget($planet, $ignoreReserve);
+        if ($ignoreReserve) {
+            return $baseBudget;
+        }
+
+        $resources = $planet->getResources();
+        $total = $resources->metal->get() + $resources->crystal->get() + $resources->deuterium->get();
+        $savingsTarget = $this->getStrategicSavingsTarget();
+        $globalTotal = $savingsTarget['current_total'] ?? $this->getTotalResourcesAllPlanets();
+        if ($savingsTarget && $globalTotal < $savingsTarget['target_total']) {
+            $savingsCap = $savingsTarget['target_total'] * 0.30;
+            return min($baseBudget, $savingsCap);
+        }
+
+        return $baseBudget;
+    }
+
+    private function getBaseSpendableBudget(PlanetService $planet, bool $ignoreReserve = false): float
+    {
         $economy = $this->bot->getEconomySettings();
         $resources = $planet->getResources();
         $total = $resources->metal->get() + $resources->crystal->get() + $resources->deuterium->get();
@@ -435,6 +475,54 @@ class BotService
         }
 
         return $total * max(0, 1 - $reserve);
+    }
+
+    private function getStrategicSavingsTarget(): ?array
+    {
+        if ($this->strategicSavingsChecked) {
+            return $this->strategicSavingsTarget;
+        }
+
+        $this->strategicSavingsChecked = true;
+        try {
+            $planner = new BotStrategicPlannerService();
+            $cost = $planner->getNextPlannedCost($this);
+            if (!$cost || empty($cost['total'])) {
+                $this->strategicSavingsTarget = null;
+                return null;
+            }
+            $total = (float) $cost['total'];
+            $this->strategicSavingsTarget = [
+                'step_total' => $total,
+                'target_total' => $total * 1.2,
+                'current_total' => $this->getTotalResourcesAllPlanets(),
+            ];
+        } catch (\Exception) {
+            $this->strategicSavingsTarget = null;
+        }
+
+        return $this->strategicSavingsTarget;
+    }
+
+    private function getTotalResourcesAllPlanets(): float
+    {
+        if ($this->totalResourcesCache !== null) {
+            return $this->totalResourcesCache;
+        }
+
+        $total = 0.0;
+        foreach ($this->player->planets->all() as $planet) {
+            $resources = $planet->getResources();
+            $total += $resources->metal->get() + $resources->crystal->get() + $resources->deuterium->get();
+        }
+
+        $this->totalResourcesCache = $total;
+        return $total;
+    }
+
+    private function isEnergyBuilding(string $machineName): bool
+    {
+        return in_array($machineName, ['solar_plant', 'fusion_plant'], true);
     }
 
     public function getStorageUsagePercent(PlanetService $planet): float
@@ -574,6 +662,103 @@ class BotService
             ->count();
 
         return $incoming > 0;
+    }
+
+    public function shouldNinjaDefend(): bool
+    {
+        try {
+            $planetIds = $this->player->planets->allIds();
+            if (empty($planetIds)) {
+                return false;
+            }
+
+            $incoming = FleetMission::whereIn('planet_id_to', $planetIds)
+                ->where('canceled', 0)
+                ->where('processed', 0)
+                ->whereIn('mission_type', [1, 9, 10])
+                ->where('time_arrival', '>', now()->timestamp)
+                ->orderBy('time_arrival')
+                ->first();
+
+            if (!$incoming) {
+                return false;
+            }
+
+            $targetPlanet = Planet::find($incoming->planet_id_to);
+            if (!$targetPlanet) {
+                return false;
+            }
+
+            $planetService = app(PlanetServiceFactory::class)->make($targetPlanet->id);
+            $defenderFleet = $planetService->getShipUnits()->toArray();
+            $defenderDefenses = $planetService->getDefenseUnits()->toArray();
+            if (empty($defenderFleet) && empty($defenderDefenses)) {
+                return false;
+            }
+
+            $attackerFleet = $this->extractFleetFromMission($incoming);
+            if (empty($attackerFleet)) {
+                return false;
+            }
+
+            $defenderTech = $this->getCombatTechLevelsFromResearch([
+                'weapon_technology' => $this->player->getResearchLevel('weapon_technology'),
+                'shielding_technology' => $this->player->getResearchLevel('shielding_technology'),
+                'armor_technology' => $this->player->getResearchLevel('armor_technology'),
+            ]);
+
+            $attackerTech = ['weapons' => 0, 'shielding' => 0, 'armor' => 0];
+            try {
+                $intelService = new BotIntelligenceService();
+                $attackerIntel = $intelService->getTargetIntel($this->bot->id, $incoming->user_id);
+                if ($attackerIntel) {
+                    $attackerTech = $this->getCombatTechLevelsFromResearch($attackerIntel->research ?? []);
+                }
+            } catch (Exception) {
+                // Non-critical
+            }
+
+            $simulator = new BotBattleSimulator();
+            $result = $simulator->simulate(
+                $attackerFleet,
+                $attackerTech,
+                $defenderFleet,
+                $defenderDefenses,
+                $defenderTech,
+                (int) config('bots.battle_sim_iterations', 3)
+            );
+
+            $attackerWin = (float) ($result['win_chance'] ?? 1.0);
+            $defenderWin = 1.0 - $attackerWin;
+            return $defenderWin >= 0.70;
+        } catch (Exception $e) {
+            logger()->debug("Bot {$this->bot->id}: shouldNinjaDefend failed: {$e->getMessage()}");
+            return false;
+        }
+    }
+
+    /**
+     * Extract fleet units from an incoming mission.
+     *
+     * @return array<string, int>
+     */
+    private function extractFleetFromMission(FleetMission $mission): array
+    {
+        $fields = [
+            'light_fighter', 'heavy_fighter', 'cruiser', 'battle_ship', 'battlecruiser',
+            'bomber', 'destroyer', 'deathstar', 'small_cargo', 'large_cargo',
+            'colony_ship', 'recycler', 'espionage_probe',
+        ];
+
+        $fleet = [];
+        foreach ($fields as $field) {
+            $amount = (int) ($mission->{$field} ?? 0);
+            if ($amount > 0) {
+                $fleet[$field] = $amount;
+            }
+        }
+
+        return $fleet;
     }
 
     public function ensureCharacterClass(): void
@@ -785,6 +970,71 @@ class BotService
         }
     }
 
+    public function optimizedFleetSave(): bool
+    {
+        try {
+            if (!$this->hasFleetSlotsAvailable()) {
+                return false;
+            }
+
+            $source = $this->getRichestPlanet();
+            if ($source === null) {
+                return false;
+            }
+
+            $target = $this->findFarthestPlanetForSave($source);
+            if ($target === null) {
+                return $this->performFleetSave();
+            }
+
+            $units = $source->getShipUnits();
+            if ($units->getAmount() === 0) {
+                return false;
+            }
+
+            $fleet = new \OGame\GameObjects\Models\Units\UnitCollection();
+            foreach ($units->units as $unitObj) {
+                $sendAmount = max(0, $unitObj->amount - 1);
+                if ($sendAmount > 0) {
+                    $fleet->addUnit($unitObj->unitObject, $sendAmount);
+                }
+            }
+
+            if ($fleet->getAmount() === 0) {
+                return false;
+            }
+
+            $fleetMissionService = app(FleetMissionService::class);
+            $targetCoords = $target->getPlanetCoordinates();
+            $speedPercent = 10;
+            $consumption = $fleetMissionService->calculateConsumption($source, $fleet, $targetCoords, 4, $speedPercent);
+            if ($source->getResources()->deuterium->get() < $consumption) {
+                return $this->performFleetSave();
+            }
+
+            $fleetMissionService->createNewFromPlanet(
+                $source,
+                $targetCoords,
+                \OGame\Models\Enums\PlanetType::Planet,
+                4,
+                $fleet,
+                new Resources(0, 0, 0, 0),
+                $speedPercent,
+                0
+            );
+
+            $this->logAction(BotActionType::FLEET, "Optimized fleet save to {$targetCoords->asString()}", [
+                'consumption' => $consumption,
+                'speed' => $speedPercent,
+            ]);
+
+            return true;
+        } catch (Exception $e) {
+            logger()->warning("Bot {$this->bot->id}: optimizedFleetSave failed: {$e->getMessage()}");
+            return false;
+        }
+    }
+
     public function tryJumpGateEvacuation(): bool
     {
         try {
@@ -864,6 +1114,30 @@ class BotService
         }
 
         return null;
+    }
+
+    private function findFarthestPlanetForSave(PlanetService $source): ?PlanetService
+    {
+        $planets = $this->player->planets->all();
+        if (empty($planets)) {
+            return null;
+        }
+
+        $fleetMissionService = app(FleetMissionService::class);
+        $farthest = null;
+        $maxDistance = -1;
+        foreach ($planets as $planet) {
+            if ($planet->getPlanetId() === $source->getPlanetId()) {
+                continue;
+            }
+            $distance = $fleetMissionService->calculateFleetMissionDistance($source, $planet->getPlanetCoordinates());
+            if ($distance > $maxDistance) {
+                $maxDistance = $distance;
+                $farthest = $planet;
+            }
+        }
+
+        return $farthest ?? $this->findSafePlanetForSave($source);
     }
 
     public function sendColonization(): bool
@@ -1150,6 +1424,15 @@ class BotService
                 }
 
                 $fieldFull = !$this->hasPlanetFieldSpace($planet);
+                $economy = $this->bot->getEconomySettings();
+                $resources = $planet->getResources();
+                $totalResources = $resources->metal->get() + $resources->crystal->get() + $resources->deuterium->get();
+                $baseMaxToSpend = $totalResources * (1 - ($economy['save_for_upgrade_percent'] ?? 0.3));
+                $savingsTarget = $this->getStrategicSavingsTarget();
+                $savingsCap = null;
+                if ($savingsTarget && $totalResources < $savingsTarget['target_total']) {
+                    $savingsCap = $savingsTarget['target_total'] * 0.30;
+                }
 
                 if ($fieldFull) {
                     if ($this->canUpgradeTerraformer($planet)) {
@@ -1182,11 +1465,10 @@ class BotService
 
                     $price = ObjectService::getObjectPrice($building->machine_name, $planet);
                     $cost = $price->metal->get() + $price->crystal->get() + $price->deuterium->get();
-
-                    $economy = $this->bot->getEconomySettings();
-                    $resources = $planet->getResources();
-                    $maxToSpend = ($resources->metal->get() + $resources->crystal->get() + $resources->deuterium->get())
-                                 * (1 - $economy['save_for_upgrade_percent']);
+                    $maxToSpend = $baseMaxToSpend;
+                    if ($savingsCap !== null && !$this->isEnergyBuilding($building->machine_name)) {
+                        $maxToSpend = min($maxToSpend, $savingsCap);
+                    }
 
                     if ($cost > $maxToSpend) {
                         continue;
@@ -2157,6 +2439,11 @@ class BotService
                 return true;
             }
 
+            $savingsTarget = $this->getStrategicSavingsTarget();
+            if ($savingsTarget && ($savingsTarget['current_total'] ?? $this->getTotalResourcesAllPlanets()) < $savingsTarget['target_total']) {
+                return false;
+            }
+
             if (!$this->hasFleetSlotsAvailable()) {
                 $this->logAction(BotActionType::TRADE, 'No fleet slots available for transport', [], 'failed');
                 return false;
@@ -2301,10 +2588,7 @@ class BotService
                 $price = ObjectService::getObjectPrice($tech->machine_name, $planet);
                 $cost = $price->metal->get() + $price->crystal->get() + $price->deuterium->get();
 
-                $economy = $this->bot->getEconomySettings();
-                $resources = $planet->getResources();
-                $maxToSpend = ($resources->metal->get() + $resources->crystal->get() + $resources->deuterium->get())
-                             * (1 - $economy['save_for_upgrade_percent']);
+                $maxToSpend = $this->getSpendableBudget($planet);
 
                 if ($cost > $maxToSpend) {
                     continue;
@@ -2621,8 +2905,8 @@ class BotService
             $this->logAction(BotActionType::ATTACK, 'Attack on cooldown', [], 'failed');
             return false;
         }
-        if (!$this->hasFleetSlotsAvailable()) {
-            $this->logAction(BotActionType::ATTACK, 'No fleet slots available', [], 'failed');
+        if (!$this->hasFleetSlotsForAction()) {
+            $this->logAction(BotActionType::ATTACK, 'No fleet slots available (reserved for emergencies)', [], 'failed');
             return false;
         }
         if ($this->isUnderThreat()) {
@@ -2703,6 +2987,53 @@ class BotService
             if ($fleet->getAmount() === 0) {
                 $this->logAction(BotActionType::ATTACK, 'No fleet available', [], 'failed');
                 return false;
+            }
+
+            // System 2: Battle simulation check with intel data (abort if too risky)
+            try {
+                $defenderFleet = [];
+                $defenderDefenses = [];
+                $defenderTech = ['weapons' => 0, 'shielding' => 0, 'armor' => 0];
+
+                $intelService = new BotIntelligenceService();
+                $targetIntel = $intelService->getTargetIntel($this->bot->id, $target->getPlayer()->getId());
+                if ($targetIntel) {
+                    $defenderFleet = $targetIntel->ships ?? [];
+                    $defenderDefenses = $targetIntel->defenses ?? [];
+                    $defenderTech = $this->getCombatTechLevelsFromResearch($targetIntel->research ?? []);
+                } elseif ($report) {
+                    $defenderFleet = $report->ships ?? [];
+                    $defenderDefenses = $report->defense ?? [];
+                    $defenderTech = $this->getCombatTechLevelsFromResearch($report->research ?? []);
+                }
+
+                if (!empty($defenderFleet) || !empty($defenderDefenses)) {
+                    $simulator = new BotBattleSimulator();
+                    $attackerTech = $this->getCombatTechLevelsFromResearch([
+                        'weapon_technology' => $this->player->getResearchLevel('weapon_technology'),
+                        'shielding_technology' => $this->player->getResearchLevel('shielding_technology'),
+                        'armor_technology' => $this->player->getResearchLevel('armor_technology'),
+                    ]);
+                    $result = $simulator->simulate(
+                        $fleet->toArray(),
+                        $attackerTech,
+                        $defenderFleet,
+                        $defenderDefenses,
+                        $defenderTech,
+                        (int) config('bots.battle_sim_iterations', 3)
+                    );
+                    $threshold = $this->getAttackWinChanceThreshold($this->getPersonality());
+                    if (($result['win_chance'] ?? 0.0) < $threshold) {
+                        $this->logAction(BotActionType::ATTACK, 'Battle simulation too risky, aborting attack', [
+                            'win_chance' => $result['win_chance'] ?? 0.0,
+                            'threshold' => $threshold,
+                        ], 'failed');
+                        $this->addAvoidTargetUserId($target->getPlayer()->getId());
+                        return false;
+                    }
+                }
+            } catch (Exception $e) {
+                logger()->debug("Bot {$this->bot->id}: battle simulation failed: {$e->getMessage()}");
             }
 
             $lootEstimate = 0;
@@ -3554,6 +3885,161 @@ class BotService
         }
     }
 
+    public function trySendAcsDefend(): bool
+    {
+        try {
+            if (!config('bots.allow_alliances', true)) {
+                return false;
+            }
+            if (!$this->hasFleetSlotsForAction()) {
+                return false;
+            }
+
+            $allyIds = \OGame\Models\BotThreatMap::where('bot_id', $this->bot->id)
+                ->where('is_ally', true)
+                ->pluck('threat_user_id')
+                ->toArray();
+            if (empty($allyIds)) {
+                return false;
+            }
+
+            $allyPlanetIds = Planet::whereIn('user_id', $allyIds)->pluck('id')->toArray();
+            if (empty($allyPlanetIds)) {
+                return false;
+            }
+
+            $incoming = FleetMission::whereIn('planet_id_to', $allyPlanetIds)
+                ->where('canceled', 0)
+                ->where('processed', 0)
+                ->whereIn('mission_type', [1, 9, 10])
+                ->where('time_arrival', '>', now()->timestamp)
+                ->orderBy('time_arrival')
+                ->first();
+
+            if (!$incoming) {
+                return false;
+            }
+
+            $targetPlanet = Planet::find($incoming->planet_id_to);
+            if (!$targetPlanet) {
+                return false;
+            }
+
+            $source = $this->getFleetPlanet() ?? $this->getRichestPlanet();
+            if ($source === null) {
+                return false;
+            }
+
+            $units = $source->getShipUnits();
+            if ($units->getAmount() === 0) {
+                return false;
+            }
+
+            $fleet = new \OGame\GameObjects\Models\Units\UnitCollection();
+            foreach ($units->units as $unitObj) {
+                $sendAmount = (int) floor($unitObj->amount * 0.5);
+                if ($sendAmount > 0) {
+                    $fleet->addUnit($unitObj->unitObject, $sendAmount);
+                }
+            }
+
+            if ($fleet->getAmount() === 0) {
+                return false;
+            }
+
+            $fleetMissionService = app(FleetMissionService::class);
+            $targetCoords = $targetPlanet->getPlanetCoordinates();
+            $speedPercent = 100;
+            $consumption = $fleetMissionService->calculateConsumption($source, $fleet, $targetCoords, 5, $speedPercent);
+            if ($source->getResources()->deuterium->get() < $consumption) {
+                return false;
+            }
+
+            $fleetMissionService->createNewFromPlanet(
+                $source,
+                $targetCoords,
+                \OGame\Models\Enums\PlanetType::Planet,
+                5, // ACS Defend
+                $fleet,
+                new Resources(0, 0, 0, 0),
+                $speedPercent,
+                0
+            );
+
+            $this->logAction(BotActionType::FLEET, "Sent ACS defend to {$targetCoords->asString()}", [
+                'consumption' => $consumption,
+                'ships' => $fleet->getAmount(),
+            ]);
+
+            return true;
+        } catch (Exception $e) {
+            logger()->warning("Bot {$this->bot->id}: trySendAcsDefend failed: {$e->getMessage()}");
+            return false;
+        }
+    }
+
+    public function shareIntel(): bool
+    {
+        try {
+            if (!config('bots.allow_alliances', true)) {
+                return false;
+            }
+
+            $allyIds = \OGame\Models\BotThreatMap::where('bot_id', $this->bot->id)
+                ->where('is_ally', true)
+                ->pluck('threat_user_id')
+                ->toArray();
+            if (empty($allyIds)) {
+                return false;
+            }
+
+            $recentIntel = \OGame\Models\BotIntel::where('bot_id', $this->bot->id)
+                ->where('last_espionage_at', '>=', now()->subHours(2))
+                ->orderByDesc('last_espionage_at')
+                ->limit(10)
+                ->get();
+
+            if ($recentIntel->isEmpty()) {
+                return false;
+            }
+
+            $allyBots = Bot::whereIn('user_id', $allyIds)->get();
+            if ($allyBots->isEmpty()) {
+                return false;
+            }
+
+            foreach ($allyBots as $allyBot) {
+                foreach ($recentIntel as $intel) {
+                    $payload = $intel->only([
+                        'target_user_id', 'target_planet_id',
+                        'galaxy', 'system', 'planet',
+                        'resources_metal', 'resources_crystal', 'resources_deuterium',
+                        'fleet_power', 'defense_power',
+                        'ships', 'defenses', 'buildings', 'research',
+                        'threat_level', 'profitability_score',
+                        'is_inactive', 'last_activity_at', 'last_espionage_at',
+                    ]);
+                    $payload['bot_id'] = $allyBot->id;
+
+                    \OGame\Models\BotIntel::updateOrCreate(
+                        [
+                            'bot_id' => $allyBot->id,
+                            'galaxy' => $intel->galaxy,
+                            'system' => $intel->system,
+                            'planet' => $intel->planet,
+                        ],
+                        $payload
+                    );
+                }
+            }
+
+            return true;
+        } catch (Exception $e) {
+            logger()->warning("Bot {$this->bot->id}: shareIntel failed: {$e->getMessage()}");
+            return false;
+        }
+    }
+
     private function pickAttackSpeedPercent(PlanetService $target): float
     {
         try {
@@ -3569,6 +4055,30 @@ class BotService
         }
 
         return rand(80, 100);
+    }
+
+    private function getAttackWinChanceThreshold(BotPersonality $personality): float
+    {
+        return match ($personality) {
+            BotPersonality::AGGRESSIVE, BotPersonality::RAIDER, BotPersonality::EXPLORER => 0.40,
+            BotPersonality::DEFENSIVE, BotPersonality::TURTLE => 0.70,
+            default => 0.55,
+        };
+    }
+
+    /**
+     * Normalize research array into combat tech levels for simulator.
+     *
+     * @param array<string, int> $research
+     * @return array{weapons: int, shielding: int, armor: int}
+     */
+    private function getCombatTechLevelsFromResearch(array $research): array
+    {
+        return [
+            'weapons' => (int) ($research['weapon_technology'] ?? $research['weapons'] ?? 0),
+            'shielding' => (int) ($research['shielding_technology'] ?? $research['shielding'] ?? 0),
+            'armor' => (int) ($research['armor_technology'] ?? $research['armor'] ?? 0),
+        ];
     }
 
     /**

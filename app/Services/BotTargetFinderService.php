@@ -4,6 +4,7 @@ namespace OGame\Services;
 
 use OGame\Enums\BotTargetType;
 use OGame\Factories\PlanetServiceFactory;
+use OGame\Models\BotBattleHistory;
 use OGame\Models\Planet;
 use OGame\Models\User;
 
@@ -34,6 +35,12 @@ class BotTargetFinderService
             $botUserIds = array_values(array_unique(array_merge($botUserIds, $avoidUserIds)));
         }
 
+        // System 5: Avoid targets we lost to multiple times recently
+        $historyAvoid = $this->getAvoidListFromBattleHistory($bot->getBot()->id);
+        if (!empty($historyAvoid)) {
+            $botUserIds = array_values(array_unique(array_merge($botUserIds, $historyAvoid)));
+        }
+
         // Also avoid NAP and ally targets
         try {
             $intel = new BotIntelligenceService();
@@ -54,15 +61,47 @@ class BotTargetFinderService
         $ratio = (float) config('bots.avoid_stronger_player_ratio', 1.2);
         $maxScore = $avoidStronger && $botScore > 0 ? (int) ($botScore * $ratio) : null;
 
+        // System 7: 40% chance to prioritize hostile/enemy targets
+        try {
+            if (mt_rand(1, 100) <= 40) {
+                $intel = new BotIntelligenceService();
+                $threatMap = $intel->getThreatMap($bot->getBot()->id);
+                $hostile = $threatMap->filter(function ($entry) use ($botUserIds) {
+                    return $entry->threat_score > 20 && !in_array($entry->threat_user_id, $botUserIds, true);
+                })->sortByDesc('threat_score');
+                if ($hostile->isNotEmpty()) {
+                    $targetUserId = $hostile->first()->threat_user_id;
+                    $planet = Planet::where('user_id', $targetUserId)->first();
+                    if ($planet) {
+                        return $this->planetFactory->make($planet->id);
+                    }
+                }
+            }
+        } catch (\Exception $e) {
+            // Non-critical
+        }
+
         // First try: known profitable targets from intelligence
         try {
             $intel = new BotIntelligenceService();
             $profitableTargets = $intel->getProfitableTargets($bot->getBot()->id, 5, $botUserIds);
             if ($profitableTargets->isNotEmpty()) {
-                $best = $profitableTargets->first();
-                $planet = \OGame\Models\Planet::where('user_id', $best->target_user_id)->first();
+                $best = null;
+                $bestScore = -1;
+                foreach ($profitableTargets as $target) {
+                    $bonus = $this->getTargetPriorityFromHistory($bot->getBot()->id, $target->target_user_id);
+                    $score = (int) ($target->profitability_score ?? 0) * (1 + $bonus);
+                    if ($score > $bestScore) {
+                        $bestScore = $score;
+                        $best = $target;
+                    }
+                }
+                $planet = $best ? \OGame\Models\Planet::where('user_id', $best->target_user_id)->first() : null;
                 if ($planet && $planet->user_id !== $selfId) {
-                    return $this->planetFactory->make($planet->id);
+                    $candidate = $this->planetFactory->make($planet->id);
+                    if ($this->isTargetAcceptable($bot, $candidate)) {
+                        return $candidate;
+                    }
                 }
             }
         } catch (\Exception $e) {
@@ -73,16 +112,24 @@ class BotTargetFinderService
         if (config('bots.prefer_nearby_targets', true)) {
             $nearby = $this->findNearbyTarget($bot, $botUserIds, $maxScore);
             if ($nearby !== null) {
-                return $nearby;
+                if ($this->isTargetAcceptable($bot, $nearby)) {
+                    return $nearby;
+                }
             }
         }
 
-        return match ($targetType) {
+        $candidate = match ($targetType) {
             BotTargetType::RANDOM => $this->findRandomTarget($botUserIds, $selfId, $maxScore),
             BotTargetType::WEAK => $this->findWeakTarget($bot, $botUserIds, $maxScore),
             BotTargetType::RICH => $this->findRichTarget($bot, $botUserIds, $maxScore),
             BotTargetType::SIMILAR => $this->findSimilarTarget($bot, $botUserIds, $maxScore),
         };
+
+        if ($candidate && $this->isTargetAcceptable($bot, $candidate)) {
+            return $candidate;
+        }
+
+        return null;
     }
 
     /**
@@ -322,5 +369,92 @@ class BotTargetFinderService
         } catch (\Exception $e) {
             return null;
         }
+    }
+
+    /**
+     * System 5: Avoid targets we lost to multiple times in the last 24 hours.
+     *
+     * @return int[]
+     */
+    public function getAvoidListFromBattleHistory(int $botId): array
+    {
+        try {
+            return BotBattleHistory::where('bot_id', $botId)
+                ->where('result', 'loss')
+                ->where('created_at', '>=', now()->subHours(24))
+                ->selectRaw('target_user_id, COUNT(*) as loss_count')
+                ->groupBy('target_user_id')
+                ->having('loss_count', '>=', 2)
+                ->pluck('target_user_id')
+                ->toArray();
+        } catch (\Exception $e) {
+            return [];
+        }
+    }
+
+    /**
+     * Get win rate against a specific target (wins / total).
+     */
+    public function getWinRateAgainst(int $botId, int $targetUserId): ?float
+    {
+        try {
+            $wins = BotBattleHistory::where('bot_id', $botId)
+                ->where('target_user_id', $targetUserId)
+                ->where('result', 'win')
+                ->count();
+            $losses = BotBattleHistory::where('bot_id', $botId)
+                ->where('target_user_id', $targetUserId)
+                ->where('result', 'loss')
+                ->count();
+            $total = $wins + $losses;
+            if ($total === 0) {
+                return null;
+            }
+            return $wins / $total;
+        } catch (\Exception $e) {
+            return null;
+        }
+    }
+
+    /**
+     * Get priority bonus for targets with profitable history.
+     * Returns a 0-1 bonus multiplier.
+     */
+    public function getTargetPriorityFromHistory(int $botId, int $targetUserId): float
+    {
+        try {
+            $history = BotBattleHistory::where('bot_id', $botId)
+                ->where('target_user_id', $targetUserId)
+                ->where('created_at', '>=', now()->subDays(7))
+                ->get(['loot_gained', 'fleet_lost_value']);
+
+            if ($history->isEmpty()) {
+                return 0.0;
+            }
+
+            $net = 0;
+            foreach ($history as $entry) {
+                $net += (int) ($entry->loot_gained ?? 0) - (int) ($entry->fleet_lost_value ?? 0);
+            }
+
+            if ($net <= 0) {
+                return 0.0;
+            }
+
+            return min(1.0, $net / 500000);
+        } catch (\Exception $e) {
+            return 0.0;
+        }
+    }
+
+    private function isTargetAcceptable(BotService $bot, PlanetService $planet): bool
+    {
+        $botId = $bot->getBot()->id;
+        $targetUserId = $planet->getPlayer()->getId();
+        $winRate = $this->getWinRateAgainst($botId, $targetUserId);
+        if ($winRate !== null && $winRate < 0.30) {
+            return false;
+        }
+        return true;
     }
 }

@@ -4,6 +4,8 @@ namespace OGame\Services;
 
 use OGame\Enums\BotPersonality;
 use OGame\GameObjects\Models\Units\UnitCollection;
+use OGame\Models\BotBattleHistory;
+use OGame\Models\BotIntel;
 use OGame\Services\ObjectService;
 
 /**
@@ -47,6 +49,25 @@ class BotFleetBuilderService
         try {
             $intel = new BotIntelligenceService();
             $targetIntel = $intel->getTargetIntel($bot->getBot()->id, $target->getPlayer()->getId());
+        } catch (\Exception $e) {
+            // Non-critical
+        }
+
+        // System 5: adapt based on last battle outcome vs this target
+        try {
+            $lastBattle = BotBattleHistory::where('bot_id', $bot->getBot()->id)
+                ->where('target_user_id', $target->getPlayer()->getId())
+                ->orderByDesc('created_at')
+                ->first();
+            if ($lastBattle && $lastBattle->result === 'loss') {
+                $attackPercentage = min(0.95, $attackPercentage * 1.2);
+                if (!empty($lastBattle->enemy_defenses) || !empty($lastBattle->enemy_fleet)) {
+                    $overrideIntel = new BotIntel();
+                    $overrideIntel->defenses = $lastBattle->enemy_defenses ?? [];
+                    $overrideIntel->ships = $lastBattle->enemy_fleet ?? [];
+                    $targetIntel = $overrideIntel;
+                }
+            }
         } catch (\Exception $e) {
             // Non-critical
         }
@@ -110,6 +131,14 @@ class BotFleetBuilderService
         if ($largeCargo === 0 && $smallCargo > 0) {
             $sendSmall = max(2, (int)($smallCargo * $cargoRatio));
             $fleet->addUnit(ObjectService::getUnitObjectByMachineName('small_cargo'), $sendSmall);
+        }
+
+        // Cache recommended composition per target
+        try {
+            $cacheKey = "bot:{$bot->getBot()->id}:recommended_fleet:{$target->getPlayer()->getId()}";
+            cache()->put($cacheKey, $fleet->toArray(), now()->addHours(2));
+        } catch (\Exception $e) {
+            // Non-critical
         }
 
         return $fleet;

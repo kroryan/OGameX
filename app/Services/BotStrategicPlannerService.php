@@ -240,6 +240,9 @@ class BotStrategicPlannerService
         $bot = $botService->getBot();
         $botId = $bot->id;
 
+        // Clean up stale plans first
+        $this->cleanupStalePlans($botId);
+
         // Check if we already have active plans (don't spam new ones)
         $activePlans = BotStrategicPlan::where('bot_id', $botId)
             ->where('status', 'active')
@@ -765,6 +768,117 @@ class BotStrategicPlannerService
             ->where('plan_type', $type)
             ->where('status', 'active')
             ->exists();
+    }
+
+    /**
+     * Clean up stale plans that have made no progress in 12 hours.
+     */
+    public function cleanupStalePlans(int $botId): int
+    {
+        $stalePlans = BotStrategicPlan::where('bot_id', $botId)
+            ->where('status', 'active')
+            ->where('updated_at', '<', now()->subHours(12))
+            ->get();
+
+        $cleaned = 0;
+        foreach ($stalePlans as $plan) {
+            $plan->status = 'abandoned';
+            $plan->save();
+            $cleaned++;
+        }
+
+        return $cleaned;
+    }
+
+    /**
+     * Get the resource cost of the next planned step.
+     * Returns null if no active plan or step cannot be costed.
+     *
+     * @return array{metal: int, crystal: int, deuterium: int, total: int}|null
+     */
+    public function getNextPlannedCost(BotService $botService): ?array
+    {
+        $botId = $botService->getBot()->id;
+        $plans = BotStrategicPlan::where('bot_id', $botId)
+            ->where('status', 'active')
+            ->orderByDesc('priority')
+            ->get();
+
+        foreach ($plans as $plan) {
+            $step = $plan->getCurrentStep();
+            if (!$step) {
+                continue;
+            }
+
+            // Skip completed steps
+            if ($this->isStepCompleted($botService, $step)) {
+                continue;
+            }
+
+            $cost = $this->getStepCost($botService, $step);
+            if ($cost !== null) {
+                return $cost;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Get the resource cost of a specific plan step.
+     */
+    private function getStepCost(BotService $botService, array $step): ?array
+    {
+        $type = $step['type'] ?? '';
+
+        try {
+            if ($type === 'building') {
+                $planet = $botService->getRichestPlanet();
+                if (!$planet) {
+                    return null;
+                }
+                $price = ObjectService::getObjectPrice($step['name'], $planet);
+                return [
+                    'metal' => $price->metal->get(),
+                    'crystal' => $price->crystal->get(),
+                    'deuterium' => $price->deuterium->get(),
+                    'total' => $price->metal->get() + $price->crystal->get() + $price->deuterium->get(),
+                ];
+            }
+
+            if ($type === 'research') {
+                $planet = $botService->getRichestPlanet();
+                if (!$planet) {
+                    return null;
+                }
+                $price = ObjectService::getObjectPrice($step['name'], $planet);
+                return [
+                    'metal' => $price->metal->get(),
+                    'crystal' => $price->crystal->get(),
+                    'deuterium' => $price->deuterium->get(),
+                    'total' => $price->metal->get() + $price->crystal->get() + $price->deuterium->get(),
+                ];
+            }
+
+            if ($type === 'unit') {
+                $planet = $botService->getRichestPlanet();
+                if (!$planet) {
+                    return null;
+                }
+                $amount = $step['amount'] ?? 1;
+                $price = ObjectService::getObjectPrice($step['name'], $planet);
+                return [
+                    'metal' => $price->metal->get() * $amount,
+                    'crystal' => $price->crystal->get() * $amount,
+                    'deuterium' => $price->deuterium->get() * $amount,
+                    'total' => ($price->metal->get() + $price->crystal->get() + $price->deuterium->get()) * $amount,
+                ];
+            }
+        } catch (\Exception $e) {
+            return null;
+        }
+
+        return null;
     }
 
     private function estimateHourlyProduction(string $machineName, int $level): int

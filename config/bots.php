@@ -63,6 +63,8 @@ return [
     'attack_phalanx_scan_chance' => 0.35,
     'attack_phalanx_abort_window_seconds' => 300,
     'avoid_stronger_player_ratio' => 1.8,
+    'battle_sim_iterations' => 3,
+    'geopolitical_system_range' => 50,
 
     // Merchant trade tuning
     'merchant_trade_min_imbalance' => 0.35,

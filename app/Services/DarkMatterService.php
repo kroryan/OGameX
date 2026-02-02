@@ -4,6 +4,7 @@ namespace OGame\Services;
 
 use Exception;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use OGame\Enums\DarkMatterTransactionType;
 use OGame\Models\User;
 
@@ -44,6 +45,10 @@ class DarkMatterService
             throw new Exception('Cannot credit negative amount');
         }
 
+        if (!$this->hasDarkMatterColumn()) {
+            return;
+        }
+
         DB::transaction(function () use ($user, $amount, $type, $description) {
             // Lock the user row for update
             $user = User::where('id', $user->id)->lockForUpdate()->first();
@@ -79,6 +84,10 @@ class DarkMatterService
             throw new Exception('Cannot debit negative amount');
         }
 
+        if (!$this->hasDarkMatterColumn()) {
+            return;
+        }
+
         DB::transaction(function () use ($user, $amount, $type, $description) {
             // Lock the user row for update
             $user = User::where('id', $user->id)->lockForUpdate()->first();
@@ -111,6 +120,9 @@ class DarkMatterService
      */
     public function getBalance(User $user): int
     {
+        if (!$this->hasDarkMatterColumn()) {
+            return 0;
+        }
         return $user->dark_matter;
     }
 
@@ -123,7 +135,15 @@ class DarkMatterService
      */
     public function canAfford(User $user, int $amount): bool
     {
+        if (!$this->hasDarkMatterColumn()) {
+            return false;
+        }
         return $user->dark_matter >= $amount;
+    }
+
+    private function hasDarkMatterColumn(): bool
+    {
+        return Schema::hasColumn('users', 'dark_matter');
     }
 
     /**

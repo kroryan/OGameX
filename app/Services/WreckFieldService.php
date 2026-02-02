@@ -700,6 +700,10 @@ class WreckFieldService
      */
     public function getAllWreckFieldsForCurrentPlanet(PlanetService $planetService): array
     {
+        if (!\Illuminate\Support\Facades\Schema::hasTable('wreck_fields')) {
+            return [];
+        }
+
         $coordinates = $planetService->getPlanetCoordinates();
 
         $wreckFields = WreckField::where('galaxy', $coordinates->galaxy)

@@ -14,6 +14,7 @@ use Illuminate\Notifications\DatabaseNotification;
 use Illuminate\Notifications\DatabaseNotificationCollection;
 use Illuminate\Notifications\Notifiable;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Schema;
 use OGame\Enums\CharacterClass;
 use Spatie\Permission\Models\Permission;
 use Spatie\Permission\Models\Role;
@@ -102,6 +103,11 @@ class User extends Authenticatable
         static::created(function (User $user) {
             // Skip Legor
             if ($user->username === 'Legor') {
+                return;
+            }
+
+            $rolesTable = config('permission.table_names.roles', 'roles');
+            if (!Schema::hasTable($rolesTable)) {
                 return;
             }
 

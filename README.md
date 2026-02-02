@@ -148,7 +148,10 @@ OGameX includes a comprehensive playerbots system that allows you to create auto
   - Technology research priority system
   - Profitable target finding with power comparison
   - Fleet composition based on personality
-  - Resource management with save percentages
+  - Resource management with strategic savings for plan objectives
+  - Lightweight battle outcome simulation before attacks
+  - Diplomatic threat tracking and history-aware target avoidance
+  - Emergency threat response (1-minute scheduler)
 
 - **Target Selection**: Bots can prefer different types of targets
   - Random targets

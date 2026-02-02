@@ -16,12 +16,16 @@ El Sistema de Playerbots es una funcionalidad avanzada de OGameX que permite cre
 
 ### Características Principales
 
-- **4 Personalidades**: Agresivo, Defensivo, Económico y Equilibrado
-- **Decisiones Inteligentes**: Los bots priorizan acciones según su personalidad
+- **9 Personalidades**: Agresivo, Defensivo, Económico, Equilibrado, Raider, Turtle, Científico, Diplomático, Explorador
+- **Decisiones Inteligentes**: Los bots priorizan acciones según su personalidad y su estado
 - **Sistema de Objetivos**: Los bots pueden buscar objetivos aleatorios, débiles, ricos o similares
 - **Configuración Flexible**: Ajusta horarios de actividad, probabilidades y comportamiento
 - **Panel de Administración**: Monitorea y controla todos los bots desde la interfaz web
 - **Sistema de Logs**: Registro completo de todas las acciones de los bots
+- **Ahorro Estratégico**: Reserva recursos para cumplir objetivos del plan
+- **Simulador de Batallas**: Estima el resultado antes de atacar
+- **Diplomacia Gradual**: Relaciones con amenazas y aliados que se ajustan con el tiempo
+- **Respuesta de Emergencia**: Scheduler de 1 minuto para amenazas inminentes
 
 ---
 

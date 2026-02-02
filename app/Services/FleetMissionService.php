@@ -5,6 +5,7 @@ namespace OGame\Services;
 use Exception;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\Date;
+use Illuminate\Support\Facades\Schema;
 use OGame\Enums\FleetSpeedType;
 use OGame\Factories\GameMissionFactory;
 use OGame\Factories\PlanetServiceFactory;
@@ -316,6 +317,10 @@ class FleetMissionService
      */
     public function currentPlayerUnderAttack(): bool
     {
+        if (!Schema::hasTable($this->model->getTable())) {
+            return false;
+        }
+
         $planetIds = [];
         foreach ($this->player->planets->all() as $planet) {
             $planetIds[] = $planet->getPlanetId();

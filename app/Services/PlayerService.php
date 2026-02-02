@@ -170,6 +170,11 @@ class PlayerService
      */
     public function isAdmin(): bool
     {
+        if (!\Illuminate\Support\Facades\Schema::hasTable('roles')
+            || !\Illuminate\Support\Facades\Schema::hasTable('model_has_roles')) {
+            return false;
+        }
+
         return $this->user->hasRole('admin');
     }
 

@@ -89,6 +89,9 @@ docker compose down -v
 # Ejecutar el scheduler manualmente (procesa todos los bots activos)
 docker compose exec -T ogamex-app php artisan ogamex:scheduler:process-bots
 
+# Ejecutar el scheduler de emergencias (amenazas inminentes)
+docker compose exec -T ogamex-app php artisan ogamex:scheduler:process-bot-emergencies
+
 # Ver la configuración actual del scheduler
 docker compose exec -T ogamex-app php artisan tinker --execute="var_dump(config('bots'));"
 ```
@@ -510,6 +513,10 @@ return [
     'expedition_chance' => 0.15,
 ];
 ```
+
+Notas importantes:
+- **Ahorro estratégico**: los bots reservan recursos para el siguiente paso del plan (objetivo = coste × 1.2). Mientras ahorran, el gasto se limita al 30% del objetivo y se bloquean transportes no críticos.
+- **Emergencias**: el scheduler `ogamex:scheduler:process-bot-emergencies` comprueba amenazas inminentes cada minuto.
 
 Modificar estos valores requiere limpiar la caché de configuración:
 

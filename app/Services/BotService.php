@@ -3924,6 +3924,7 @@ class BotService
             if (!$targetPlanet) {
                 return false;
             }
+            $targetService = app(PlanetServiceFactory::class)->make($targetPlanet->id);
 
             $source = $this->getFleetPlanet() ?? $this->getRichestPlanet();
             if ($source === null) {
@@ -3948,7 +3949,7 @@ class BotService
             }
 
             $fleetMissionService = app(FleetMissionService::class);
-            $targetCoords = $targetPlanet->getPlanetCoordinates();
+            $targetCoords = $targetService->getPlanetCoordinates();
             $speedPercent = 100;
             $consumption = $fleetMissionService->calculateConsumption($source, $fleet, $targetCoords, 5, $speedPercent);
             if ($source->getResources()->deuterium->get() < $consumption) {

@@ -63,7 +63,7 @@ class BotBattleSimulator
      * @param array<string, int> $defenderDefenses  machine_name => count (defense structures)
      * @param array{weapons: int, shielding: int, armor: int} $defenderTech
      * @param int $simCount Number of simulations to average
-     * @return array{win_chance: float, estimated_losses_value: int, estimated_loot_ratio: float}
+     * @return array{win_chance: float, estimated_losses_value: int}
      */
     public function simulate(
         array $attackerFleet,

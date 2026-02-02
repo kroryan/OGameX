@@ -112,11 +112,8 @@ OGameX includes a comprehensive playerbots system that allows you to create auto
 
 #### Features
 
-- **4 Personality Types**: Each bot has a unique personality that affects its decision-making
-  - **Aggressive**: Focused on combat and fleet building (35% fleet, 35% attack)
-  - **Defensive**: Focused on defenses and production (40% build, 25% fleet)
-  - **Economic**: Focused on resource production and research (50% build, 30% research)
-  - **Balanced**: Well-rounded approach to all aspects (30% build, 25% fleet, 20% attack, 25% research)
+- **9 Personality Types**: Each bot has a unique personality that affects its decision-making
+  - Aggressive, Defensive, Economic, Balanced, Raider, Turtle, Scientist, Diplomat, Explorer
 
 - **Smart Decision Making**:
   - Building prioritization based on personality and level curves
@@ -153,9 +150,10 @@ OGameX includes a comprehensive playerbots system that allows you to create auto
   - Users can select personality and review their own bot logs
   - Useful for testing and passive play
 
-- **Scheduler Command**: Process all active bots periodically
+- **Scheduler Commands**: Process all active bots periodically + emergency threat checks
   ```bash
   docker compose exec -T ogamex-app php artisan ogamex:scheduler:process-bots
+  docker compose exec -T ogamex-app php artisan ogamex:scheduler:process-bot-emergencies
   ```
 
 #### Usage

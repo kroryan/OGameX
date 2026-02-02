@@ -65,8 +65,12 @@ class ProcessBotEmergencies extends Command
                 continue;
             }
 
-            /** @var BotService $botService */
-            $botService = $botFactory->makeFromBotId($botId);
+            try {
+                /** @var BotService $botService */
+                $botService = $botFactory->makeFromBotId($botId);
+            } catch (\Exception) {
+                continue;
+            }
             if (!$botService) {
                 continue;
             }

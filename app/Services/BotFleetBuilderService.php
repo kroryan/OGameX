@@ -44,6 +44,17 @@ class BotFleetBuilderService
         };
         $attackPercentage = max(0.1, min(0.95, (float) $attackPercentage));
 
+        // System 1: General class gets -50% fuel, so send more ships
+        try {
+            $classBonuses = $bot->getClassBonuses();
+            if (!empty($classBonuses['fuel_reduction']) && $classBonuses['fuel_reduction'] < 1.0) {
+                // General class: can afford more ships due to reduced fuel
+                $attackPercentage = min(0.95, $attackPercentage * 1.15);
+            }
+        } catch (\Exception $e) {
+            // Non-critical
+        }
+
         // Check intelligence for target defense composition
         $targetIntel = null;
         try {
@@ -97,17 +108,6 @@ class BotFleetBuilderService
         if ($recyclers > 0) {
             $sendRecyclers = max(1, (int)($recyclers * 0.3));
             $fleet->addUnit(ObjectService::getUnitObjectByMachineName('recycler'), $sendRecyclers);
-        }
-
-        // System 1: General class gets -50% fuel, so send more ships
-        try {
-            $classBonuses = $bot->getClassBonuses();
-            if (!empty($classBonuses['fuel_reduction']) && $classBonuses['fuel_reduction'] < 1.0) {
-                // General class: can afford more ships due to reduced fuel
-                $attackPercentage = min(0.95, $attackPercentage * 1.15);
-            }
-        } catch (\Exception $e) {
-            // Non-critical
         }
 
         // ALL personalities bring cargo ships for loot (critical for ROI)
